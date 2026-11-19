@@ -1,7 +1,7 @@
 name: pocketforge
 description: "PocketForge — локальный OpenCode-агент на Android: proot-песочница с Alpine + opencode serve, чат, git, файлы."
 publish_to: "none"
-version: 0.3.0+3
+version: 0.3.1+4
 
 environment:
   # Dart SDK из Flutter 3.50.0 stable
@@ -28,6 +28,3 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
-  assets:
-    - assets/artifacts.json
-    - assets/rootfs/alpine-minirootfs-3.24.4-aarch64.tar.gz

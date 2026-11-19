@@ -10,8 +10,16 @@ import org.json.JSONObject
 class RootfsInstaller(private val ctx: Context) {
 
     private val artifacts: JSONObject by lazy {
-        ctx.assets.open("artifacts.json").bufferedReader().use { it.readText() }
-            .let { JSONObject(it) }
+        val text = try {
+            ctx.assets.open("artifacts.json").bufferedReader().use { it.readText() }
+        } catch (e: IOException) {
+            throw IOException(
+                "Манифест artifacts.json не найден в assets APK " +
+                    "(должен лежать в android/app/src/main/assets)",
+                e,
+            )
+        }
+        JSONObject(text)
     }
 
     val opencodeVersion: String get() = artifacts.getJSONObject("opencode").getString("version")
@@ -72,7 +80,12 @@ class RootfsInstaller(private val ctx: Context) {
 
     private fun copyAssetWithSha(assetPath: String, dest: File, expectedSha256: String) {
         val md = java.security.MessageDigest.getInstance("SHA-256")
-        ctx.assets.open(assetPath).use { input ->
+        val stream = try {
+            ctx.assets.open(assetPath)
+        } catch (e: IOException) {
+            throw IOException("Ассет '$assetPath' не найден в assets APK", e)
+        }
+        stream.use { input ->
             dest.outputStream().use { out ->
                 val buf = ByteArray(64 * 1024)
                 while (true) {

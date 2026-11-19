@@ -1,5 +1,5 @@
 {
-  "version": "0.3.0",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.0-arm64.apk",
-  "notes": "M8: политики сети и разрешений в настройках, история команд в терминале; все вехи M0-M8 закрыты"
+  "version": "0.3.1",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.1-arm64.apk",
+  "notes": "Хотфикс: манифест артефактов и rootfs перенесены в нативные assets APK — запуск песочницы больше не падает с ошибкой artifacts.json"
 }

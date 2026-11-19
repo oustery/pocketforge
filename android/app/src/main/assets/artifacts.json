@@ -11,7 +11,7 @@
     "distribution": "alpine",
     "version": "3.24.4",
     "arch": "aarch64",
-    "asset": "assets/rootfs/alpine-minirootfs-3.24.4-aarch64.tar.gz",
+    "asset": "rootfs/alpine-minirootfs-3.24.4-aarch64.tar.gz",
     "sha256": "4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de",
     "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.4-aarch64.tar.gz"
   },

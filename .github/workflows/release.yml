@@ -64,6 +64,14 @@ jobs:
           VER="${{ steps.ver.outputs.ver }}"
           cp build/app/outputs/flutter-apk/app-release.apk "pocketforge-v$VER-arm64.apk"
 
+      - name: Проверить нативные assets в APK (регрессия artifacts.json)
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          for f in assets/artifacts.json assets/rootfs/alpine-minirootfs-3.24.4-aarch64.tar.gz; do
+            unzip -l "$APK" | grep -q " $f$" || { echo "ОШИБКА: нет в APK: $f"; exit 1; }
+          done
+          echo "OK: artifacts.json и rootfs лежат в корне assets APK"
+
       - name: Проверить подпись (apksigner)
         run: |
           if [ ! -f "$RUNNER_TEMP/release.keystore" ]; then

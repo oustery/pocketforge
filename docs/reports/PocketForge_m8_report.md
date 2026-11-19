@@ -56,3 +56,25 @@
 - **Для следующего цикла** (если потребуется): PTY-терминал (socket-pair +
   потоковый вывод), автотесты UI (integration_test на эмуляторе), публикация
   в F-Droid как альтернативный канал.
+
+## 4. Хотфикс 0.3.1 — ошибка запуска «artifacts.json»
+
+Первый запуск песочницы на устройстве падал с ошибкой artifacts.json.
+
+- **Причина**: манифест `artifacts.json` и tarball rootfs были объявлены как
+  Flutter-ассеты (в APK они попадают в `assets/flutter_assets/…`), а
+  `RootfsInstaller` читал их Android-AssetManager'ом — `ctx.assets.open(...)`
+  смотрит в корень APK `assets/`, где этих файлов не было →
+  `FileNotFoundException` при `startSandbox`. Dart-тесты и analyze этого не
+  видят: нативные Kotlin-тесты в CI отсутствуют.
+- **Фикс**: оба файла перенесены в `android/app/src/main/assets/` (из него
+  Gradle кладёт их в корень `assets/` APK, где их находит AssetManager);
+  путь rootfs в манифесте сокращён до `rootfs/…`; из pubspec убраны
+  мёртвые Flutter-asset-записи.
+- **Регрессия**: в release.yml добавлен шаг, который до публикации
+  проверяет наличие `assets/artifacts.json` и
+  `assets/rootfs/alpine-minirootfs-…tar.gz` в собранном APK.
+- **UX ошибок**: `RootfsInstaller` оборачивает отсутствие манифеста/ассета в
+  IOException с явным текстом (где файл должен лежать).
+- **Версия 0.3.1+4** — обновление увидят устройства на 0.3.0 (semver-сравнение
+  в in-app update не пропускает сборки с той же версией).
