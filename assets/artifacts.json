@@ -1,0 +1,36 @@
+{
+  "opencode": {
+    "version": "1.19.6",
+    "url": "https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-arm64-musl.tar.gz",
+    "sha256": "45407388777dfc1894591c9727c169f202ad92c75757038950630a0fbb12ca97",
+    "sizeBytes": 79891356,
+    "tarEntry": "opencode",
+    "installPath": "/usr/local/bin/opencode"
+  },
+  "rootfs": {
+    "distribution": "alpine",
+    "version": "3.24.4",
+    "arch": "aarch64",
+    "asset": "assets/rootfs/alpine-minirootfs-3.24.4-aarch64.tar.gz",
+    "sha256": "4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de",
+    "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.4-aarch64.tar.gz"
+  },
+  "proot": {
+    "version": "5.3.0",
+    "source": "https://github.com/proot-me/proot/releases/download/v5.3.0/proot-v5.3.0-aarch64-static",
+    "sha256": "fa10b1a7818c2f5b1dcb5834450570c368c9ecf66d31521509621b95c4538a45",
+    "jniLib": "libproot.so"
+  },
+  "apkPackages": [
+    "git",
+    "bash",
+    "ripgrep",
+    "curl",
+    "ca-certificates",
+    "libstdc++"
+  ],
+  "openapi": {
+    "source": "api/openapi-1.19.6.json",
+    "generator": "scripts/gen_api_client.py"
+  }
+}

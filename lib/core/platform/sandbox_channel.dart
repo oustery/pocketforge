@@ -1,0 +1,145 @@
+import 'dart:async';
+
+import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
+
+/// Фазы жизненного цикла песочницы (синхронизировано с Kotlin RuntimeService).
+enum SandboxPhase {
+  /// Песочница не инициализирована (после полного сброса).
+  uninitialized,
+
+  /// Распаковка Alpine rootfs из assets.
+  installingRootfs,
+
+  /// Скачивание бинарника opencode (arm64-musl).
+  downloadingOpencode,
+
+  /// Первый `apk add` внутри песочницы.
+  bootstrappingApk,
+
+  /// Запуск proot + opencode serve, ожидание healthcheck.
+  starting,
+
+  /// Serve отвечает на healthcheck (200 c Basic-паролем).
+  ready,
+
+  /// Песочница остановлена (кнопкой или сервисом).
+  stopped,
+
+  /// Ошибка установки/запуска — см. [SandboxState.lastError].
+  error,
+}
+
+/// Превращает имя фазы с нативной стороны в [SandboxPhase]; неизвестное
+/// имя мапится в [SandboxPhase.error].
+SandboxPhase sandboxPhaseFromName(String? name) => SandboxPhase.values
+    .firstWhere((p) => p.name == name, orElse: () => SandboxPhase.error);
+
+/// Снимок состояния песочницы, приходящий с нативной стороны.
+@immutable
+class SandboxState {
+  /// Создаёт снимок состояния.
+  const SandboxState({
+    required this.phase,
+    this.message = '',
+    this.progress,
+    this.port,
+    this.healthy = false,
+    this.logTail = '',
+    this.lastError,
+  });
+
+  /// Разбирает map из MethodChannel (`status`/`onState`).
+  factory SandboxState.fromMap(Object? map) {
+    final m = Map<String, Object?>.from(map! as Map<Object?, Object?>);
+    return SandboxState(
+      phase: sandboxPhaseFromName(m['phase'] as String?),
+      message: (m['message'] as String?) ?? '',
+      progress: (m['progress'] as num?)?.toDouble(),
+      port: m['port'] as int?,
+      healthy: (m['healthy'] as bool?) ?? false,
+      logTail: (m['logTail'] as String?) ?? '',
+      lastError: m['lastError'] as String?,
+    );
+  }
+
+  /// Текущая фаза жизненного цикла.
+  final SandboxPhase phase;
+
+  /// Человекочитаемое сообщение о текущем шаге/ошибке.
+  final String message;
+
+  /// Прогресс 0..1 для фаз установки/загрузки (иначе null).
+  final double? progress;
+
+  /// Порт serve на 127.0.0.1 (после успешного запуска).
+  final int? port;
+
+  /// Последний healthcheck прошёл (200 c Basic-паролем).
+  final bool healthy;
+
+  /// Хвост лога serve (до 8 КБ).
+  final String logTail;
+
+  /// Последняя ошибка установки/запуска.
+  final String? lastError;
+
+  /// Метка healthcheck для UI.
+  String get healthLabel => switch (phase) {
+        SandboxPhase.ready when healthy => 'OK (200 с Basic-паролем)',
+        SandboxPhase.ready => 'проверяется…',
+        _ => '—',
+      };
+}
+
+/// Типизированный мост Dart → Kotlin RuntimeService.
+///
+/// Канал двунаправленный: Dart вызывает методы (start/stop/status/reset),
+/// нативная сторона пушит [SandboxState] через тот же канал.
+class SandboxChannel {
+  static const MethodChannel _channel = MethodChannel('pocketforge/sandbox');
+
+  final StreamController<SandboxState> _states =
+      StreamController<SandboxState>.broadcast();
+
+  bool _handlerInstalled = false;
+
+  /// Поток состояний, пушащихся с нативной стороны.
+  Stream<SandboxState> get states => _states.stream;
+
+  /// Регистрирует обработчик нативных пушей (вызывается один раз).
+  void installHandler() {
+    if (_handlerInstalled) {
+      return;
+    }
+    _handlerInstalled = true;
+    _channel.setMethodCallHandler((call) async {
+      if (call.method == 'onState') {
+        _states.add(SandboxState.fromMap(call.arguments));
+      }
+      return null;
+    });
+  }
+
+  /// Текущее состояние песочницы (запросом).
+  Future<SandboxState> status() async {
+    final res = await _channel.invokeMethod<Object?>('status');
+    return SandboxState.fromMap(res);
+  }
+
+  /// Запуск песочницы через RuntimeService (startForegroundService).
+  Future<void> start() => _channel.invokeMethod<void>('start');
+
+  /// Остановка песочницы.
+  Future<void> stop() => _channel.invokeMethod<void>('stop');
+
+  /// Полный сброс содержимого песочницы.
+  Future<void> reset() => _channel.invokeMethod<void>('reset');
+
+  /// Снимает обработчик и закрывает поток состояний.
+  void dispose() {
+    unawaited(_states.close());
+    _handlerInstalled = false;
+    _channel.setMethodCallHandler(null);
+  }
+}

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- targetSdk 28+: cleartext-трафик запрещён по умолчанию; сервер opencode
+     работает на http://127.0.0.1 (внутри устройства) — разрешаем только его. -->
+<network-security-config>
+    <domain-config cleartextTrafficPermitted="true">
+        <domain includeSubdomains="false">127.0.0.1</domain>
+        <domain includeSubdomains="false">localhost</domain>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,18 @@
+include: package:very_good_analysis/analysis_options.yaml
+
+analyzer:
+  exclude:
+    - "**/*.g.dart"
+    - "lib/core/api/models.gen.dart"
+    - "lib/core/api/client.gen.dart"
+    - build/**
+    - android/**
+
+linter:
+  rules:
+    # Линт и его автофикс несовместимы с этой версией Flutter: автофикс
+    # превращает `const SandboxState({...})` в некомпилируемый `const new`.
+    # Имена конструкторов и фабрик оставляем явными.
+    unnecessary_type_name_in_constructor: false
+    # Сгенерированный клиент зеркалит имена операций из OpenAPI.
+    non_constant_identifier_names: false
