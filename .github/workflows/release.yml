@@ -71,6 +71,13 @@ jobs:
             || { echo "ОШИБКА: нет в APK: assets/artifacts.json"; exit 1; }
           echo "OK: манифест артефактов лежит в корне assets APK"
 
+      - name: Отчёт о составе APK (контроль стриппинга и R8)
+        run: |
+          APK=build/app/outputs/flutter-apk/app-release.apk
+          echo "Крупнейшие записи (распакованный размер):"
+          unzip -l "$APK" | sort -k1 -n -r | grep -v "^--" | head -8
+          unzip -l "$APK" | tail -1
+
       - name: Проверить подпись (apksigner)
         run: |
           if [ ! -f "$RUNNER_TEMP/release.keystore" ]; then

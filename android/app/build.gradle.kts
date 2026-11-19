@@ -27,6 +27,11 @@ android {
         // flag during build.
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // Приложение поставляется только для arm64: фильтр убирает чужие ABI
+        // из нативных библиотек плагинов (~0.3 МБ лишнего в APK).
+        ndk {
+            abiFilters += listOf("arm64-v8a")
+        }
     }
 
     signingConfigs {
@@ -55,6 +60,15 @@ android {
                 // CI подписывает release-ключом из секретов.
                 signingConfigs.getByName("debug")
             }
+            // R8: ужимаем Kotlin/Java-часть (dex) и неиспользуемые ресурсы.
+            // Нативные .so и Dart AOT (libapp.so) R8 не трогает — их размер
+            // определяется стриппингом (см. packaging.jniLibs ниже).
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro",
+            )
         }
     }
 
@@ -70,9 +84,12 @@ android {
         // libproot.so должен быть извлечён на диск (proot запускается как процесс).
         jniLibs {
             useLegacyPackaging = true
-            // Статический бинарник proot — стриппинг не нужен (и NDK-инструменты
-            // не должны вызываться: в CI-песочницах NDK может отсутствовать).
-            doNotStrip += "**/*.so"
+            // Стриппинг остальных .so включён: без него libflutter.so едет в
+            // APK с отладочными DWARF-символами (~43 МБ вместо ~9 МБ).
+            // AGP стрипает через NDK; если NDK недоступен, он упакует
+            // библиотеку как есть с warning — сборка не падает. Для proot
+            // (статический бинарник) стриппинг отключён явно.
+            doNotStrip += "**/libproot.so"
         }
     }
 }
