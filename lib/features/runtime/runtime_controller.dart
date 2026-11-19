@@ -31,11 +31,15 @@ class SandboxController extends AsyncNotifier<SandboxState> {
       try {
         final s = await channel.status();
         final cur = state.value;
+        // Сравниваем и message/lastError: иначе «залипает» сообщение шага,
+        // если разорванный снимок пришёл между нативными push'ами.
         if (cur == null ||
             cur.phase != s.phase ||
+            cur.message != s.message ||
             cur.healthy != s.healthy ||
             cur.progress != s.progress ||
-            cur.logTail != s.logTail) {
+            cur.logTail != s.logTail ||
+            cur.lastError != s.lastError) {
           state = AsyncValue<SandboxState>.data(s);
         }
       } on Exception {

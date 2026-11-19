@@ -7,7 +7,11 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 
-/// Скачивание артефактов (opencode) с докачкой и проверкой sha256.
+/// Скачивание артефактов (opencode, rootfs) с докачкой и проверкой sha256.
+///
+/// Устойчивость на мобильных сетях: 5 попыток с паузами, докачка через
+/// `.part` + Range, готовый `.part` проверяется sha256 до обращения к сети
+/// (переживает перезапуск сервиса), HTTP 416 трактуется как «уже скачано».
 object ArtifactsDownloader {
 
     class ChecksumMismatchException(message: String) : IOException(message)
@@ -20,26 +24,37 @@ object ArtifactsDownloader {
     ): File {
         dest.parentFile?.mkdirs()
         val part = File(dest.parentFile, dest.name + ".part")
+
+        // Полный .part с прошлого запуска — сразу в дело, без сети.
+        if (isComplete(part, expectedSha256)) return promote(part, dest)
+
         var attempt = 0
         while (true) {
             attempt++
             try {
-                downloadOnce(url, part, onProgress)
+                val code = downloadOnce(url, part, onProgress)
+                if (code == 416) {
+                    // Range за пределами файла: .part уже полного размера
+                    // (прошлая попытка упала между записью и rename).
+                    if (isComplete(part, expectedSha256)) return promote(part, dest)
+                    part.delete()
+                    throw IOException("HTTP 416 для $url: .part некорректен, начинаю заново")
+                }
                 val actual = sha256(part)
                 if (!actual.equals(expectedSha256, ignoreCase = true)) {
                     part.delete()
+                    // Несовпадение детерминировано — ретраи бессмысленны.
                     throw ChecksumMismatchException(
                         "sha256 не совпал для $url: ожидалось $expectedSha256, получено $actual",
                     )
                 }
-                if (dest.exists()) dest.delete()
-                if (!part.renameTo(dest)) throw IOException("Не удалось переименовать $part → $dest")
-                return dest
+                return promote(part, dest)
+            } catch (e: ChecksumMismatchException) {
+                throw e
             } catch (e: IOException) {
-                if (attempt >= 3) throw e
-                // докачка продолжится с .part в следующей попытке
+                if (attempt >= 5) throw e
                 try {
-                    Thread.sleep(1500L * attempt)
+                    Thread.sleep(2000L * attempt)
                 } catch (_: InterruptedException) {
                     Thread.currentThread().interrupt()
                     throw e
@@ -48,11 +63,23 @@ object ArtifactsDownloader {
         }
     }
 
-    private fun downloadOnce(url: String, dest: File, onProgress: (Long, Long) -> Unit) {
+    /// sha256 существующего .part совпадает с ожидаемым — скачан целиком.
+    private fun isComplete(part: File, expectedSha256: String): Boolean =
+        part.exists() && part.length() > 0 && sha256(part).equals(expectedSha256, ignoreCase = true)
+
+    /// Атомарная подмена .part → конечное имя.
+    private fun promote(part: File, dest: File): File {
+        if (dest.exists()) dest.delete()
+        if (!part.renameTo(dest)) throw IOException("Не удалось переименовать $part → $dest")
+        return dest
+    }
+
+    /// Возвращает HTTP-код финального ответа (200/206; 416 решает вызывающий).
+    private fun downloadOnce(url: String, dest: File, onProgress: (Long, Long) -> Unit): Int {
         val already = if (dest.exists()) dest.length() else 0L
         val conn = URL(url).openConnection() as HttpURLConnection
-        conn.connectTimeout = 15_000
-        conn.readTimeout = 30_000
+        conn.connectTimeout = 30_000
+        conn.readTimeout = 60_000
         conn.instanceFollowRedirects = true
         if (already > 0) conn.setRequestProperty("Range", "bytes=$already-")
 
@@ -60,9 +87,9 @@ object ArtifactsDownloader {
         when {
             code == 206 -> resumed(conn, dest, already, onProgress)
             code == 200 -> fresh(conn, dest, onProgress)
-            else -> throw IOException("HTTP $code для $url")
         }
         conn.disconnect()
+        return code
     }
 
     private fun fresh(conn: HttpURLConnection, dest: File, onProgress: (Long, Long) -> Unit) {

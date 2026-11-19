@@ -3,7 +3,7 @@
     "version": "1.19.6",
     "url": "https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-arm64-musl.tar.gz",
     "sha256": "45407388777dfc1894591c9727c169f202ad92c75757038950630a0fbb12ca97",
-    "sizeBytes": 79891356,
+    "sizeBytes": 78461019,
     "tarEntry": "opencode",
     "installPath": "/usr/local/bin/opencode"
   },

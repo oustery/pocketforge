@@ -31,18 +31,25 @@ class RuntimeService : Service() {
 
         @Volatile
         private var phase: Phase = Phase.UNINITIALIZED
+
+        // message/progress/lastError читаются из чужих потоков (3-секундный
+        // poll из Dart идёт через main/binder) — записи и снимок состояния
+        // под stateLock, иначе UI ловит разорванное состояние: фаза ERROR
+        // со старым сообщением шага («Загрузка opencode…») вместо ошибки.
+        private val stateLock = Any()
         private var message: String = ""
         private var progress: Double? = null
         private var lastError: String? = null
+        private var lastProgressPercent = -1
 
         @Volatile
         private var serviceInstance: RuntimeService? = null
         var methodChannel: MethodChannel? = null
 
-        fun currentStateMap(): Map<String, Any?> {
+        fun currentStateMap(): Map<String, Any?> = synchronized(stateLock) {
             val svc = serviceInstance
             val logTail = svc?.let { HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log")) } ?: ""
-            return mapOf(
+            mapOf(
                 "phase" to phase.name.lowercase(),
                 "message" to message,
                 "progress" to progress,
@@ -78,11 +85,24 @@ class RuntimeService : Service() {
         }
 
         private fun setState(p: Phase, msg: String = "", prog: Double? = null) {
-            phase = p
-            message = msg
-            if (p != Phase.DOWNLOADING_OPENCODE && p != Phase.INSTALLING_ROOTFS) progress = prog
-            else progress = prog
-            pushToFlutter()
+            val push: Boolean
+            synchronized(stateLock) {
+                phase = p
+                message = msg
+                progress = prog
+                // Прогресс шлём при смене целого процента, а не на каждый чанк
+                // (на 80 МБ это тысячи invokeMethod в main-поток).
+                val pct = prog?.let { (it * 100).toInt() } ?: -1
+                push = if (p == Phase.DOWNLOADING_OPENCODE || p == Phase.INSTALLING_ROOTFS) {
+                    val changed = pct != lastProgressPercent
+                    lastProgressPercent = pct
+                    changed
+                } else {
+                    lastProgressPercent = -1
+                    true
+                }
+            }
+            if (push) pushToFlutter()
         }
 
         private fun pushToFlutter() {
@@ -146,10 +166,22 @@ class RuntimeService : Service() {
             lastError = null
 
             setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs")
-            val rootfs = installer.ensureRootfs()
+            val rootfs = installer.ensureRootfs { bytes, total ->
+                if (total > 0) {
+                    setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs", bytes / total.toDouble())
+                }
+            }
 
             setState(Phase.DOWNLOADING_OPENCODE, "Загрузка opencode ${installer.opencodeVersion}")
-            installer.ensureOpencode(rootfs)
+            installer.ensureOpencode(rootfs) { bytes, total ->
+                if (total > 0) {
+                    setState(
+                        Phase.DOWNLOADING_OPENCODE,
+                        "Загрузка opencode ${installer.opencodeVersion}",
+                        bytes / total.toDouble(),
+                    )
+                }
+            }
 
             val apkMarker = File(rootfs, ".pf-apk-bootstrap")
             val pkgs = installer.apkPackages.joinToString(" ")

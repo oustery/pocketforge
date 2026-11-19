@@ -28,7 +28,7 @@ class RootfsInstaller(private val ctx: Context) {
             (0 until arr.length()).map { arr.getString(it) }
         }
 
-    fun ensureRootfs(): File {
+    fun ensureRootfs(onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
         val rootfs = SandboxPaths.rootfs(ctx)
         val marker = File(rootfs, ".pf-rootfs-version")
         val wanted = artifacts.getJSONObject("rootfs").getString("version")
@@ -45,6 +45,7 @@ class RootfsInstaller(private val ctx: Context) {
             url = rootfsCfg.getString("url"),
             dest = File(SandboxPaths.artifacts(ctx), "rootfs-$wanted.tar.gz"),
             expectedSha256 = rootfsCfg.getString("sha256"),
+            onProgress = onProgress,
         )
         TarExtractor.extract(tar, rootfs)
         tar.delete()
@@ -58,7 +59,7 @@ class RootfsInstaller(private val ctx: Context) {
         return rootfs
     }
 
-    fun ensureOpencode(rootfs: File): File {
+    fun ensureOpencode(rootfs: File, onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
         val oc = artifacts.getJSONObject("opencode")
         val marker = File(rootfs, "usr/local/bin/.pf-opencode-version")
         val binary = File(rootfs, oc.getString("installPath").removePrefix("/"))
@@ -69,6 +70,7 @@ class RootfsInstaller(private val ctx: Context) {
             url = oc.getString("url"),
             dest = File(SandboxPaths.artifacts(ctx), "opencode-${oc.getString("version")}-arm64.tar.gz"),
             expectedSha256 = oc.getString("sha256"),
+            onProgress = onProgress,
         )
         TarExtractor.extract(tar, SandboxPaths.artifacts(ctx))
         // tar содержит ./opencode

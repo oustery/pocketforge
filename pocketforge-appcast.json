@@ -1,5 +1,5 @@
 {
-  "version": "0.3.2",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.2-arm64.apk",
-  "notes": "APK сжат в 5.4 раза (47.6 → 8.8 МБ): стриппинг DWARF-символов движка, только arm64, R8"
+  "version": "0.3.3",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.3-arm64.apk",
+  "notes": "Диагностика ошибок: реальная причина сбоя теперь видна на экране и в терминале; загрузка артефактов устойчивее на мобильных сетях (докачка, 5 попыток, прогресс в %)"
 }
