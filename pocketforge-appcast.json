@@ -1,5 +1,5 @@
 {
-  "version": "0.3.1",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.1-arm64.apk",
-  "notes": "Хотфикс: запуск песочницы больше не падает с ошибкой artifacts.json (манифест — в нативных assets APK); rootfs теперь скачивается при первом запуске (нужен интернет)"
+  "version": "0.3.2",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.2-arm64.apk",
+  "notes": "APK сжат в 5.4 раза (47.6 → 8.8 МБ): стриппинг DWARF-символов движка, только arm64, R8"
 }
