@@ -34,13 +34,16 @@ jobs:
           cache: true
 
       - name: Расшифровать release-keystore из секретов
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         env:
           KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
           KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          if [ -z "$KEYSTORE_B64" ]; then
+            echo "Секрет ANDROID_KEYSTORE_BASE64 не задан — APK будет подписан debug-ключом"
+            exit 0
+          fi
           echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
           echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
           echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
@@ -62,8 +65,11 @@ jobs:
           cp build/app/outputs/flutter-apk/app-release.apk "pocketforge-v$VER-arm64.apk"
 
       - name: Проверить подпись (apksigner)
-        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
         run: |
+          if [ ! -f "$RUNNER_TEMP/release.keystore" ]; then
+            echo "release-keystore отсутствует — подпись debug-ключом, проверку пропускаю"
+            exit 0
+          fi
           APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort | tail -1)"
           "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk
 
