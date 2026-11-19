@@ -19,6 +19,11 @@ class RuntimePage extends ConsumerWidget {
         title: const Text('PocketForge — песочница'),
         actions: [
           IconButton(
+            icon: const Icon(Icons.terminal),
+            tooltip: 'Терминал (M7)',
+            onPressed: () => context.push('/terminal'),
+          ),
+          IconButton(
             icon: const Icon(Icons.chat_bubble_outline),
             tooltip: 'Чат (M4)',
             onPressed: () => context.push('/chat'),

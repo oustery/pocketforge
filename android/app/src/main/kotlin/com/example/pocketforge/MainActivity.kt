@@ -5,13 +5,21 @@ import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import androidx.core.content.FileProvider
+import android.os.Handler
+import android.os.Looper
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.MethodChannel
 import com.example.pocketforge.sandbox.RuntimeService
 import java.io.File
+import java.util.concurrent.Executors
 
 class MainActivity : FlutterActivity() {
+
+    /// M7 терминал: exec — блокирующая операция, выполняется вне main-thread,
+    /// результат/ошибка возвращаются в UI-поток через [mainHandler].
+    private val execExecutor = Executors.newSingleThreadExecutor()
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -37,6 +45,25 @@ class MainActivity : FlutterActivity() {
                 "reset" -> {
                     RuntimeService.resetSandbox(this)
                     result.success(null)
+                }
+                "exec" -> {
+                    val cmd = call.argument<String>("command")
+                    if (cmd.isNullOrBlank()) {
+                        result.error("bad_args", "command обязателен", null)
+                        return@setMethodCallHandler
+                    }
+                    val timeoutMs = (call.argument<Number>("timeoutMs") as? Number)?.toLong()
+                        ?: 30_000L
+                    execExecutor.execute {
+                        try {
+                            val res = RuntimeService.execInSandbox(cmd, timeoutMs)
+                            mainHandler.post { result.success(res) }
+                        } catch (e: Exception) {
+                            mainHandler.post {
+                                result.error("exec_failed", e.message ?: "ошибка exec", null)
+                            }
+                        }
+                    }
                 }
                 else -> result.notImplemented()
             }

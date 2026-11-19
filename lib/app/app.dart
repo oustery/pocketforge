@@ -6,6 +6,7 @@ import 'package:pocketforge/features/chat/chat_route.dart';
 import 'package:pocketforge/features/git/git_page.dart';
 import 'package:pocketforge/features/runtime/runtime_page.dart';
 import 'package:pocketforge/features/settings/settings_page.dart';
+import 'package:pocketforge/features/terminal/terminal_page.dart';
 
 /// Провайдер роутера. M4: домашний экран — статус песочницы, чат —
 /// активная сессия, авторизация — по провайдеру.
@@ -33,6 +34,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         name: 'auth',
         builder: (context, state) =>
             AuthPage(providerID: state.pathParameters['provider']!),
+      ),
+      GoRoute(
+        path: '/terminal',
+        name: 'terminal',
+        builder: (context, state) => const TerminalPage(),
       ),
       GoRoute(
         path: '/settings',

@@ -92,6 +92,36 @@ class SandboxState {
       };
 }
 
+/// Результат команды в песочнице (M7 терминал).
+@immutable
+class ExecOutcome {
+  /// Создаёт результат команды.
+  const ExecOutcome({
+    required this.code,
+    required this.stdout,
+    required this.stderr,
+  });
+
+  /// Разбирает map из MethodChannel (`exec`).
+  factory ExecOutcome.fromMap(Object? map) {
+    final m = Map<String, Object?>.from(map! as Map<Object?, Object?>);
+    return ExecOutcome(
+      code: (m['code'] as num?)?.toInt() ?? -1,
+      stdout: (m['stdout'] as String?) ?? '',
+      stderr: (m['stderr'] as String?) ?? '',
+    );
+  }
+
+  /// Код возврата (0 — успех).
+  final int code;
+
+  /// stdout команды.
+  final String stdout;
+
+  /// stderr команды.
+  final String stderr;
+}
+
 /// Типизированный мост Dart → Kotlin RuntimeService.
 ///
 /// Канал двунаправленный: Dart вызывает методы (start/stop/status/reset),
@@ -135,6 +165,19 @@ class SandboxChannel {
 
   /// Полный сброс содержимого песочницы.
   Future<void> reset() => _channel.invokeMethod<void>('reset');
+
+  /// Команда внутри песочницы (M7 терминал): `/bin/sh -c [command]` через
+  /// proot. Блокирующий вызов на нативной стороне, таймаут [timeoutMs].
+  ///
+  /// Бросает [PlatformException] (`exec_failed`), если песочница не в фазе
+  /// ready или команда не завершилась за отведённое время.
+  Future<ExecOutcome> exec(String command, {int timeoutMs = 30000}) async {
+    final res = await _channel.invokeMethod<Object?>('exec', {
+      'command': command,
+      'timeoutMs': timeoutMs,
+    });
+    return ExecOutcome.fromMap(res);
+  }
 
   /// Снимает обработчик и закрывает поток состояний.
   void dispose() {

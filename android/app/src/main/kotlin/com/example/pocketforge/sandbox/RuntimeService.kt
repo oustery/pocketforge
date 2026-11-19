@@ -63,6 +63,20 @@ class RuntimeService : Service() {
             ctx.startService(intent)
         }
 
+        /// Команда в песочнице с захватом вывода (M7 терминал).
+        /// Блокирующая — вызывающий обязан держать её вне main-thread
+        /// (MainActivity выполняет exec на собственном executor).
+        fun execInSandbox(command: String, timeoutMs: Long): Map<String, Any?> {
+            val svc = serviceInstance
+                ?: throw java.io.IOException("Сервис песочницы не запущен")
+            if (phase != Phase.READY) {
+                throw java.io.IOException(
+                    "Песочница не готова (фаза: ${phase.name.lowercase()})",
+                )
+            }
+            return svc.manager.exec(command, timeoutMs)
+        }
+
         private fun setState(p: Phase, msg: String = "", prog: Double? = null) {
             phase = p
             message = msg

@@ -93,6 +93,62 @@ class ProotManager(private val ctx: Context) {
         return p.waitFor()
     }
 
+    /// Разовая команда с захватом stdout/stderr по отдельности (M7 терминал).
+    /// Возвращает map для MethodChannel: code/stdout/stderr.
+    /// Бросает [IOException] по таймауту (процесс убивается принудительно).
+    fun exec(shellCommand: String, timeoutMs: Long = 30_000L): Map<String, Any?> {
+        val rootfs = SandboxPaths.rootfs(ctx)
+        val proot = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
+        val args = mutableListOf(
+            proot.absolutePath,
+            "-r", rootfs.absolutePath,
+            "-b", "/proc",
+            "-b", "/dev",
+            "-b", "${SandboxPaths.workspace(ctx).absolutePath}:/root/workspace",
+            "-0",
+            "-w", "/root",
+            "/bin/sh", "-c", shellCommand,
+        )
+        val pb = ProcessBuilder(args).apply {
+            redirectErrorStream(false)
+            environment().apply {
+                put("PROOT_NO_SECCOMP", "1")
+                put("PROOT_TMP_DIR", SandboxPaths.prootTmp(ctx).absolutePath)
+                put("HOME", "/root")
+                put("PATH", "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+                put("SHELL", "/bin/sh")
+                put("LANG", "C.UTF-8")
+            }
+        }
+        val p = pb.start()
+        val stdout = StringBuilder()
+        val stderr = StringBuilder()
+        val tOut = Thread {
+            p.inputStream.use { r ->
+                r.bufferedReader().forEachLine { stdout.appendLine(it) }
+            }
+        }
+        val tErr = Thread {
+            p.errorStream.use { r ->
+                r.bufferedReader().forEachLine { stderr.appendLine(it) }
+            }
+        }
+        tOut.start()
+        tErr.start()
+        val finished = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (!finished) {
+            p.destroyForcibly()
+            throw IOException("Таймаут команды ($timeoutMs мс)")
+        }
+        tOut.join(1_000)
+        tErr.join(1_000)
+        return mapOf(
+            "code" to p.exitValue(),
+            "stdout" to stdout.toString(),
+            "stderr" to stderr.toString(),
+        )
+    }
+
     fun stop() {
         val p = processRef.getAndSet(null) ?: return
         try {
