@@ -28,13 +28,38 @@ class RootfsInstaller(private val ctx: Context) {
             (0 until arr.length()).map { arr.getString(it) }
         }
 
+    /// Критические для запуска proot пути rootfs: без симлинка /bin/sh
+    /// proot не может execve и умирает молча с кодом 255 (реальный случай
+    /// на устройстве). Возвращает список отсутствующих частей.
+    /// ВАЖНО: bin/sh — абсолютный симлинк (/bin/sh → /bin/busybox), он
+    /// «битый» снаружи rootfs (резолвится к корню Android, где /bin/busybox
+    /// нет), поэтому проверяем наличие ССЫЛКИ без резолва цели — иначе
+    /// ensureRootfs переустанавливал бы rootfs при каждом запуске.
+    private fun brokenRootfsParts(rootfs: File): List<String> {
+        val missing = mutableListOf<String>()
+        val sh = File(rootfs, "bin/sh")
+        val shOk = try {
+            java.nio.file.Files.isSymbolicLink(java.nio.file.Paths.get(sh.absolutePath)) || sh.exists()
+        } catch (_: Exception) {
+            sh.exists()
+        }
+        if (!shOk) missing += "bin/sh"
+        val busybox = File(rootfs, "bin/busybox")
+        if (!busybox.exists() || !busybox.canExecute()) missing += "bin/busybox(x)"
+        if (!File(rootfs, "sbin/apk").exists()) missing += "sbin/apk"
+        if (!File(rootfs, "lib/ld-musl-aarch64.so.1").exists()) missing += "lib/ld-musl-aarch64.so.1"
+        return missing
+    }
+
     fun ensureRootfs(onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
         val rootfs = SandboxPaths.rootfs(ctx)
         val marker = File(rootfs, ".pf-rootfs-version")
         val wanted = artifacts.getJSONObject("rootfs").getString("version")
-        if (marker.exists() && marker.readText().trim() == wanted && File(rootfs, "bin").isDirectory) {
-            return rootfs
-        }
+        val markerOk = marker.exists() && marker.readText().trim() == wanted && File(rootfs, "bin").isDirectory
+        // Маркер — не гарантия работоспособности: rootfs, распакованный
+        // старым TarExtractor без симлинков (/bin/sh отсутствует), чиним
+        // переустановкой, иначе proot молча падает с кодом 255 навсегда.
+        if (markerOk && brokenRootfsParts(rootfs).isEmpty()) return rootfs
         // распаковка с нуля (частичная установка недопустима)
         rootfs.deleteRecursively()
         rootfs.mkdirs()
@@ -49,6 +74,15 @@ class RootfsInstaller(private val ctx: Context) {
         )
         TarExtractor.extract(tar, rootfs)
         tar.delete()
+
+        // Контроль распаковки: критические пути обязаны существовать.
+        val broken = brokenRootfsParts(rootfs)
+        if (broken.isNotEmpty()) {
+            throw IOException(
+                "rootfs распакован неполно (нет: ${broken.joinToString(", ")}) — " +
+                    "нажмите «Сбросить песочницу» и «Запустить» повторно",
+            )
+        }
 
         marker.writeText(wanted)
         return rootfs

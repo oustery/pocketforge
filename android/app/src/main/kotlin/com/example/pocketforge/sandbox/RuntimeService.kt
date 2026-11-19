@@ -200,6 +200,18 @@ class RuntimeService : Service() {
             val apkMarker = File(rootfs, ".pf-apk-bootstrap")
             val pkgs = installer.apkPackages.joinToString(" ")
             if (!apkMarker.exists()) {
+                // Самотест proot ДО apk: отделяем «не запускается /bin/sh в
+                // proot» (молчаливый 255, вывод пуст — см. TarExtractor) от
+                // «apk не смог скачать пакеты» (в apk.log есть строки).
+                val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
+                val checkCode = manager.runOnce("/bin/echo pf-proot-ok", checkLog)
+                if (checkCode != 0) {
+                    val tail = HealthCheck.tail(checkLog, 400).trim()
+                    throw java.io.IOException(
+                        "proot не смог выполнить /bin/echo в песочнице (код $checkCode); " +
+                            "вывод: ${if (tail.isEmpty()) "(пусто)" else tail}",
+                    )
+                }
                 val logFile = File(SandboxPaths.logs(this), "apk.log")
                 var code = -1
                 var attempts = 0
@@ -223,7 +235,11 @@ class RuntimeService : Service() {
                     // Показываем реальный вывод apk в карточке ошибки — иначе
                     // «(нет сети?)» остаётся догадкой (проверено на устройстве).
                     val tail = HealthCheck.tail(logFile, 600).trim()
-                    val cause = if (tail.isEmpty()) "" else ". Хвост apk.log:\n$tail"
+                    val cause = if (tail.isEmpty()) {
+                        " (вывод apk пуст — обычно это отказ execve внутри proot)"
+                    } else {
+                        ". Хвост apk.log:\n$tail"
+                    }
                     throw java.io.IOException("apk add завершился с кодом $code$cause")
                 }
                 apkMarker.writeText(installer.opencodeVersion)

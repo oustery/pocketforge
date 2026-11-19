@@ -1,5 +1,5 @@
 {
-  "version": "0.3.4",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.4-arm64.apk",
-  "notes": "Сеть внутри песочницы: DNS оператора вместо заблокированных 8.8.8.8 (apk add больше не должен падать с «нет сети»); apk.log виден в панели лога и в карточке ошибки; 2 попытки bootstrap"
+  "version": "0.3.5",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.5-arm64.apk",
+  "notes": "Корневой фикс «apk add — код 255»: распаковщик rootfs больше не теряет симлинки (/bin/sh), битый rootfs чинится автоматически при запуске, перед apk — самотест proot"
 }

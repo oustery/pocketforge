@@ -1,5 +1,6 @@
 package com.example.pocketforge.sandbox
 
+import android.util.Log
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -9,119 +10,215 @@ import java.util.zip.GZIPInputStream
 
 /**
  * Минимальный распаковщик .tar.gz для rootfs/opencode.
- * Поддерживает ustar, GNU longname ('L'), PAX-заголовки ('x'),
- * симлинки ('2') и хардлинки ('1') — ровно то, что дают tarball'ы
- * Alpine minirootfs и Go-сборки opencode.
+ *
+ * Два прохода по архиву: (1) каталоги и регулярные файлы, (2) симлинки и
+ * хардлинки — цели ссылок гарантированно уже на диске.
+ *
+ * Симлинк — критический элемент rootfs: /bin/sh → /bin/busybox это симлинк,
+ * и без него proot не может execve и умирает молча с кодом 255 (реальный
+ * случай на устройстве: apk.log пуст, «apk add завершился с кодом 255»).
+ * Поэтому ссылка создаётся любой ценой: symlink → hardlink → копия цели
+ * (busybox-мультиколл и библиотеки musl одинаково работают и как hardlink,
+ * и как копия). Молчаливых пропусков больше нет: каждая неудача попадает
+ * в лог, критические отсутствия ловит verifyRootfs.
  */
 object TarExtractor {
 
+    private const val TAG = "PocketForge.Tar"
+
     fun extract(tarGz: File, destDir: File): File {
+        val issues = mutableListOf<String>()
+        var fallbacks = 0
         destDir.mkdirs()
-        GZIPInputStream(FileInputStream(tarGz)).use { gz ->
-            val header = ByteArray(512)
-            var paxPath: String? = null
-
-            while (true) {
-                if (!readFully(gz, header)) break
-                if (header.all { it.toInt() == 0 }) break // конец архива
-
-                val nameField = cString(header, 0, 100)
-                val size = octal(header, 124, 12)
-                val typeflag = header[156].toInt().toChar()
-                var linkName = cString(header, 157, 100)
-                val prefix = cString(header, 345, 155)
-                val mode = octal(header, 100, 8)
-
-                val entryName: String
-                var dataSize: Long = size
-                when (typeflag) {
-                    'L' -> { // GNU longname: тело записи — путь следующего элемента
-                        val buf = ByteArray(size.toInt())
-                        readFully(gz, buf)
-                        skipPadding(gz, size)
-                        paxPath = cString(buf, 0, buf.size)
-                        continue
-                    }
-                    'x' -> { // PAX: "длина key=value\n" — берём path
-                        val buf = ByteArray(size.toInt())
-                        readFully(gz, buf)
-                        skipPadding(gz, size)
-                        paxPath = paxValue(buf, "path") ?: paxPath
-                        continue
-                    }
-                    'g' -> { // глобальный PAX — пропускаем
-                        skip(gz, dataSize)
-                        skipPadding(gz, size)
-                        continue
-                    }
-                    else -> {
-                        entryName = (paxPath ?: if (prefix.isEmpty()) nameField else "$prefix/$nameField")
-                            .trim('/')
-                        paxPath = null
-                        linkName = paxOverrideLink ?: linkName
-                        paxOverrideLink = null
-                    }
-                }
-
-                if (entryName.isEmpty()) {
-                    skip(gz, dataSize)
-                    skipPadding(gz, size)
-                    continue
-                }
-
-                val target = File(destDir, entryName)
-                check(target.canonicalPath.startsWith(destDir.canonicalPath + File.separator) ||
-                    target.canonicalPath == destDir.canonicalPath) {
-                    "tar-элемент выходит за пределы каталога: $entryName"
-                }
-
-                when (typeflag) {
-                    '5' -> target.mkdirs()
-                    '2' -> {
-                        target.parentFile?.mkdirs()
-                        if (target.exists()) target.delete()
-                        try {
-                            Files.createSymbolicLink(
-                                Paths.get(target.absolutePath),
-                                Paths.get(linkName),
-                            )
-                        } catch (_: java.io.IOException) {
-                            // некоторые файловые системы не дают симлинки —
-                            // оставляем пропуск, busybox-пути восстановим apk-комплектом
-                        }
-                        skip(gz, dataSize)
-                    }
-                    '1' -> {
-                        target.parentFile?.mkdirs()
-                        if (target.exists()) target.delete()
-                        val linkTarget = File(destDir, linkName)
-                        if (linkTarget.exists()) {
-                            Files.createLink(Paths.get(target.absolutePath), Paths.get(linkTarget.absolutePath))
-                        }
-                        skip(gz, dataSize)
-                    }
-                    else -> { // регулярный файл ('0' или '\0')
-                        target.parentFile?.mkdirs()
-                        FileOutputStream(target).use { out ->
-                            var remaining = size
-                            val buf = ByteArray(64 * 1024)
-                            while (remaining > 0) {
-                                val chunk = gz.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
-                                if (chunk <= 0) break
-                                out.write(buf, 0, chunk)
-                                remaining -= chunk
-                            }
-                        }
-                        if (mode and 0b000111L != 0L) target.setExecutable(true, false)
-                    }
-                }
-                skipPadding(gz, size)
-            }
-        }
+        pass(tarGz, destDir, linksToo = false, issues, { fallbacks++ })
+        pass(tarGz, destDir, linksToo = true, issues, { fallbacks++ })
+        if (fallbacks > 0) Log.i(TAG, "ссылок создано заменами (hardlink/копия): $fallbacks")
+        if (issues.isNotEmpty()) Log.w(TAG, "проблемы распаковки: $issues")
         return destDir
     }
 
-    private var paxOverrideLink: String? = null
+    private fun pass(
+        tarGz: File,
+        destDir: File,
+        linksToo: Boolean,
+        issues: MutableList<String>,
+        onFallback: () -> Unit,
+    ) {
+        FileInputStream(tarGz).use { fin ->
+            GZIPInputStream(fin).use { gz ->
+                val header = ByteArray(512)
+                var paxPath: String? = null
+
+                while (true) {
+                    if (!readFully(gz, header)) break
+                    if (header.all { it.toInt() == 0 }) break // конец архива
+
+                    val nameField = cString(header, 0, 100)
+                    val size = octal(header, 124, 12)
+                    val typeflag = header[156].toInt().toChar()
+                    val linkName = cString(header, 157, 100)
+                    val prefix = cString(header, 345, 155)
+                    val mode = octal(header, 100, 8)
+
+                    val entryName: String
+                    when (typeflag) {
+                        'L' -> { // GNU longname: тело записи — путь следующего элемента
+                            val buf = ByteArray(size.toInt())
+                            readFully(gz, buf)
+                            skipPadding(gz, size)
+                            paxPath = cString(buf, 0, buf.size)
+                            continue
+                        }
+                        'x' -> { // PAX: "длина key=value\n" — берём path
+                            val buf = ByteArray(size.toInt())
+                            readFully(gz, buf)
+                            skipPadding(gz, size)
+                            paxPath = paxValue(buf, "path") ?: paxPath
+                            continue
+                        }
+                        'g' -> { // глобальный PAX — пропускаем
+                            skip(gz, size)
+                            skipPadding(gz, size)
+                            continue
+                        }
+                        else -> {
+                            entryName = (paxPath ?: if (prefix.isEmpty()) nameField else "$prefix/$nameField")
+                                .trim('/')
+                            paxPath = null
+                        }
+                    }
+
+                    if (entryName.isEmpty()) {
+                        skip(gz, size)
+                        skipPadding(gz, size)
+                        continue
+                    }
+
+                    val isLink = typeflag == '2' || typeflag == '1'
+                    if (isLink != linksToo) {
+                        skip(gz, size)
+                        skipPadding(gz, size)
+                        continue
+                    }
+
+                    val target = File(destDir, entryName)
+                    check(target.canonicalPath.startsWith(destDir.canonicalPath + File.separator) ||
+                        target.canonicalPath == destDir.canonicalPath) {
+                        "tar-элемент выходит за пределы каталога: $entryName"
+                    }
+
+                    when (typeflag) {
+                        '5' -> target.mkdirs()
+                        '2' -> {
+                            skip(gz, size)
+                            createSymlinkEntry(destDir, target, linkName, entryName, issues, onFallback)
+                        }
+                        '1' -> {
+                            skip(gz, size)
+                            createHardlinkEntry(target, destDir, linkName, entryName, issues, onFallback)
+                        }
+                        else -> { // регулярный файл ('0' или '\0')
+                            target.parentFile?.mkdirs()
+                            FileOutputStream(target).use { out ->
+                                var remaining = size
+                                val buf = ByteArray(64 * 1024)
+                                while (remaining > 0) {
+                                    val chunk = gz.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                                    if (chunk <= 0) break
+                                    out.write(buf, 0, chunk)
+                                    remaining -= chunk
+                                }
+                            }
+                            if (mode and 0b000111L != 0L) target.setExecutable(true, false)
+                        }
+                    }
+                    skipPadding(gz, size)
+                }
+            }
+        }
+    }
+
+    /// Симлинк: сначала честный symlink, затем hardlink на цель, затем копия.
+    private fun createSymlinkEntry(
+        destDir: File,
+        target: File,
+        linkName: String,
+        entryName: String,
+        issues: MutableList<String>,
+        onFallback: () -> Unit,
+    ) {
+        target.parentFile?.mkdirs()
+        if (target.exists()) target.delete()
+
+        val symlinked = runCatching {
+            Files.createSymbolicLink(Paths.get(target.absolutePath), Paths.get(linkName))
+        }.isSuccess
+        if (symlinked) return
+
+        val resolved = resolveTarget(destDir, target, linkName)
+        if (resolved != null && runCatching {
+                Files.createLink(Paths.get(target.absolutePath), Paths.get(resolved.absolutePath))
+            }.isSuccess
+        ) {
+            Log.i(TAG, "symlink $entryName заменён hardlink → $resolved")
+            onFallback()
+            return
+        }
+        if (resolved != null && resolved.isFile) {
+            if (runCatching { resolved.copyTo(target, overwrite = true) }.isSuccess) {
+                Log.i(TAG, "symlink $entryName заменён копией → $resolved")
+                onFallback()
+                return
+            }
+        }
+        // Единственный dir-симлинк в minirootfs (etc/ssl1.1/certs) не критичен
+        // для запуска — путь создаётся каталогом, apk восстановит при установке.
+        if (resolved != null && resolved.isDirectory) {
+            target.mkdirs()
+            Log.i(TAG, "dir-симлинк $entryName заменён каталогом → $resolved")
+            onFallback()
+            return
+        }
+        issues += "симлинк $entryName -> $linkName не создан"
+    }
+
+    /// Хардлинк: честный link, затем копия цели.
+    private fun createHardlinkEntry(
+        target: File,
+        destDir: File,
+        linkName: String,
+        entryName: String,
+        issues: MutableList<String>,
+        onFallback: () -> Unit,
+    ) {
+        target.parentFile?.mkdirs()
+        if (target.exists()) target.delete()
+
+        val resolved = resolveTarget(destDir, target, linkName)
+        if (resolved != null && runCatching {
+                Files.createLink(Paths.get(target.absolutePath), Paths.get(resolved.absolutePath))
+            }.isSuccess
+        ) return
+        if (resolved != null && resolved.isFile) {
+            if (runCatching { resolved.copyTo(target, overwrite = true) }.isSuccess) {
+                Log.i(TAG, "hardlink $entryName заменён копией → $resolved")
+                onFallback()
+                return
+            }
+        }
+        issues += "хардлинк $entryName -> $linkName не создан"
+    }
+
+    /// Цель ссылки: абсолютная — от корня destDir, относительная — от каталога
+    /// записи (так в Alpine лежат libz.so.1 -> libz.so.1.3.2).
+    private fun resolveTarget(destDir: File, entry: File, linkName: String): File? {
+        val f = if (linkName.startsWith("/")) {
+            File(destDir, linkName.drop(1))
+        } else {
+            File(entry.parentFile, linkName)
+        }
+        return f.takeIf { it.exists() }
+    }
 
     private fun readFully(input: java.io.InputStream, buf: ByteArray): Boolean {
         var off = 0
