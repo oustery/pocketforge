@@ -1,8 +1,6 @@
 allprojects {
     repositories {
-        maven("https://storage.googleapis.com/download.flutter.io")  // движок Flutter (mavenCentral отдаёт 429)
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
+        maven("https://storage.googleapis.com/download.flutter.io") // движок Flutter
         google()
         mavenCentral()
     }

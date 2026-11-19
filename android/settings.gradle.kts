@@ -11,11 +11,7 @@ pluginManagement {
     includeBuild("$flutterSdkPath/packages/flutter_tools/gradle")
 
     repositories {
-        // Зеркала Aliyun идут первыми: Maven Central отвечает 429 на IP CI-песочниц.
-        maven("https://storage.googleapis.com/download.flutter.io")  // движок Flutter (mavenCentral отдаёт 429)
-        maven("https://maven.aliyun.com/repository/google")
-        maven("https://maven.aliyun.com/repository/public")
-        maven("https://maven.aliyun.com/repository/gradle-plugin")
+        maven("https://storage.googleapis.com/download.flutter.io") // движок Flutter
         google()
         mavenCentral()
         gradlePluginPortal()
