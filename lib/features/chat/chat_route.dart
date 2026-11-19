@@ -2,6 +2,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/features/chat/chat_controller.dart';
 import 'package:pocketforge/features/chat/chat_page.dart';
+import 'package:pocketforge/features/git/git_controller.dart';
 
 /// Обёртка маршрута чата: выбирает активную сессию или создаёт первую.
 class ChatRoute extends ConsumerStatefulWidget {
@@ -44,6 +45,22 @@ class _ChatRouteState extends ConsumerState<ChatRoute> {
       data: (s) {
         final active = s.activeId;
         if (active != null) {
+          // Отложенное git-действие: отправить агенту и сбросить.
+          final pending = ref.read(pendingGitActionProvider);
+          if (pending != null) {
+            ref.read(pendingGitActionProvider.notifier).submit(null);
+            WidgetsBinding.instance.addPostFrameCallback((_) async {
+              try {
+                await ref
+                    .read(chatControllerProvider(active).notifier)
+                    .send(pending);
+              } on Exception catch (e) {
+                ref.read(pendingGitActionProvider.notifier).submit(
+                    'Не удалось отправить git-действие: $e',
+                  );
+              }
+            });
+          }
           return ChatPage(sessionID: active);
         }
         if (_creating) {

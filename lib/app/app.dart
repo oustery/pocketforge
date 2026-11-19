@@ -3,6 +3,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/features/auth/auth_page.dart';
 import 'package:pocketforge/features/chat/chat_route.dart';
+import 'package:pocketforge/features/git/git_page.dart';
 import 'package:pocketforge/features/runtime/runtime_page.dart';
 import 'package:pocketforge/features/settings/settings_page.dart';
 
@@ -21,6 +22,11 @@ final routerProvider = Provider<GoRouter>((ref) {
         path: '/chat',
         name: 'chat',
         builder: (context, state) => const ChatRoute(),
+      ),
+      GoRoute(
+        path: '/git',
+        name: 'git',
+        builder: (context, state) => const GitPage(),
       ),
       GoRoute(
         path: '/auth/:provider',

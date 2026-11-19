@@ -7,6 +7,7 @@ import 'dart:io';
 import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketforge/core/api/opencode_client.dart';
+import 'package:pocketforge/features/git/git_service.dart';
 
 /// Интеграционные тесты против реального opencode serve.
 ///
@@ -109,6 +110,28 @@ void main() {
       // Interrupt по неактивной сессии не должен падать.
       await client.v2SessionInterrupt(sessionID: s.id);
       await client.sessionDelete(sessionID: s.id);
+    },
+    skip: !live,
+  );
+
+  test(
+    'git (M5): vcsStatus/vcsDiff + обзор из .git через file API',
+    () async {
+      final service = GitService(client);
+      final o = await service.overview();
+      expect(o.head.detached, isFalse);
+      expect(o.head.branch, 'main');
+      expect(o.vcsFiles, isNotEmpty);
+      expect(
+        o.vcsFiles.any((f) => f.status == 'modified'),
+        isTrue,
+      );
+      expect(o.log, isNotEmpty);
+      expect(o.log.any((e) => e.message.contains('initial')), isTrue);
+      final branches = o.branches;
+      expect(branches.map((b) => b.name), contains('main'));
+      final d = await service.diff();
+      expect(d, isA<List<Object?>>());
     },
     skip: !live,
   );
