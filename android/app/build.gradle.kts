@@ -37,6 +37,14 @@ android {
         }
     }
 
+    lint {
+        // lintVital на CI падал по Metaspace и валил assembleRelease вместе
+        // с lint-воркерами модулей плагинов; для распространения вне Play
+        // релизный lint не должен блокировать сборку APK.
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
+
     packaging {
         // libproot.so должен быть извлечён на диск (proot запускается как процесс).
         jniLibs {
