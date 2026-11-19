@@ -48,6 +48,11 @@ android {
     }
 }
 
+dependencies {
+    // FileProvider для установки update-APK (M6).
+    implementation("androidx.core:core-ktx:1.15.0")
+}
+
 kotlin {
     compilerOptions {
         jvmTarget = org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17
