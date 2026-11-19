@@ -50,11 +50,6 @@ class RootfsInstaller(private val ctx: Context) {
         TarExtractor.extract(tar, rootfs)
         tar.delete()
 
-        // DNS внутри песочницы: у Android нет /etc/resolv.conf — пишем публичные
-        val resolv = File(rootfs, "etc/resolv.conf")
-        resolv.parentFile?.mkdirs()
-        resolv.writeText("nameserver 8.8.8.8\nnameserver 1.1.1.1\noptions timeout:2 attempts:2\n")
-
         marker.writeText(wanted)
         return rootfs
     }
@@ -82,5 +77,53 @@ class RootfsInstaller(private val ctx: Context) {
         extracted.delete()
         marker.writeText(oc.getString("version"))
         return binary
+    }
+
+    /// DNS внутри песочницы. Android не предоставляет /etc/resolv.conf, а
+    /// публичные резолверы (8.8.8.8/1.1.1.1) операторы часто блокируют — тогда
+    /// apk внутри proot не резолвит хосты («нет сети»), хотя Android-сторона
+    /// качается нормально: системный резолвер ходит через DNS оператора.
+    /// Поэтому сначала DNS оператора (LinkProperties), затем публичные фолбэки.
+    /// Вызывается на каждый запуск: DNS меняется при переключении Wi-Fi/сети.
+    fun writeResolvConf(rootfs: File) {
+        val resolv = File(rootfs, "etc/resolv.conf")
+        resolv.parentFile?.mkdirs()
+        val servers = (deviceDnsServers() + listOf("8.8.8.8", "1.1.1.1", "9.9.9.9"))
+            .distinct()
+            .take(4)
+        val body = servers.joinToString("\n") { "nameserver $it" }
+        resolv.writeText("$body\noptions timeout:3 attempts:3\n")
+    }
+
+    /// Реальные DNS-серверы устройства (IPv4) через ConnectivityManager.
+    private fun deviceDnsServers(): List<String> = try {
+        val cm = ctx.getSystemService(Context.CONNECTIVITY_SERVICE)
+            as android.net.ConnectivityManager
+        val out = LinkedHashSet<String>()
+        for (net in cm.allNetworks) {
+            val lp = cm.getLinkProperties(net) ?: continue
+            for (addr in lp.dnsServers) {
+                val ip = addr.hostAddress ?: continue
+                if (ip.contains(':')) continue // берём только IPv4-резолверы
+                out.add(ip)
+            }
+        }
+        out.toList()
+    } catch (_: Exception) {
+        emptyList()
+    }
+
+    /// Страховка: если в minirootfs нет /etc/apk/repositories, apk не откроет
+    /// репозитории и bootstrap упадёт. Восстанавливаем по ветке из URL rootfs.
+    fun ensureRepositories(rootfs: File) {
+        val f = File(rootfs, "etc/apk/repositories")
+        if (f.exists() && f.length() > 0) return
+        val url = artifacts.getJSONObject("rootfs").getString("url")
+        val branch = Regex("/alpine/(v[0-9.]+)/").find(url)?.groupValues?.get(1) ?: "v3.24"
+        f.parentFile?.mkdirs()
+        f.writeText(
+            "https://dl-cdn.alpinelinux.org/alpine/$branch/main\n" +
+                "https://dl-cdn.alpinelinux.org/alpine/$branch/community\n",
+        )
     }
 }

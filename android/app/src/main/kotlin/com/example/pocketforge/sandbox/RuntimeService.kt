@@ -48,7 +48,16 @@ class RuntimeService : Service() {
 
         fun currentStateMap(): Map<String, Any?> = synchronized(stateLock) {
             val svc = serviceInstance
-            val logTail = svc?.let { HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log")) } ?: ""
+            // В панели лога показываем и загрузочный лог: до READY serve.log
+            // пуст, а именно тогда падает установка — apk.log обязан быть виден.
+            val logTail = svc?.let {
+                val apkTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apk.log"), 4096).trim()
+                val serveTail = HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log"), 4096).trim()
+                buildString {
+                    if (apkTail.isNotEmpty()) append("── apk.log ──\n$apkTail\n")
+                    if (serveTail.isNotEmpty()) append("── serve.log ──\n$serveTail")
+                }
+            } ?: ""
             mapOf(
                 "phase" to phase.name.lowercase(),
                 "message" to message,
@@ -172,6 +181,11 @@ class RuntimeService : Service() {
                 }
             }
 
+            // DNS/репозитории обновляем на каждый запуск: сеть (и DNS оператора)
+            // могла смениться с прошлой установки (Wi-Fi ↔ мобильная).
+            installer.writeResolvConf(rootfs)
+            installer.ensureRepositories(rootfs)
+
             setState(Phase.DOWNLOADING_OPENCODE, "Загрузка opencode ${installer.opencodeVersion}")
             installer.ensureOpencode(rootfs) { bytes, total ->
                 if (total > 0) {
@@ -186,13 +200,31 @@ class RuntimeService : Service() {
             val apkMarker = File(rootfs, ".pf-apk-bootstrap")
             val pkgs = installer.apkPackages.joinToString(" ")
             if (!apkMarker.exists()) {
-                setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs")
-                val code = manager.runOnce(
-                    "apk update && apk add --no-cache $pkgs",
-                    File(SandboxPaths.logs(this), "apk.log"),
-                )
+                val logFile = File(SandboxPaths.logs(this), "apk.log")
+                var code = -1
+                var attempts = 0
+                // 2 попытки: одиночный сбой DNS/обрыв канала на мобильной сети
+                // не должен валить всю установку.
+                while (attempts < 2) {
+                    attempts++
+                    setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempts из 2)")
+                    code = manager.runOnce("apk update && apk add --no-cache $pkgs", logFile)
+                    if (code == 0) break
+                    if (attempts < 2) {
+                        try {
+                            Thread.sleep(3000)
+                        } catch (_: InterruptedException) {
+                            Thread.currentThread().interrupt()
+                            throw java.io.IOException("Bootstrap прерван")
+                        }
+                    }
+                }
                 if (code != 0) {
-                    throw java.io.IOException("apk add завершился с кодом $code (нет сети?)")
+                    // Показываем реальный вывод apk в карточке ошибки — иначе
+                    // «(нет сети?)» остаётся догадкой (проверено на устройстве).
+                    val tail = HealthCheck.tail(logFile, 600).trim()
+                    val cause = if (tail.isEmpty()) "" else ". Хвост apk.log:\n$tail"
+                    throw java.io.IOException("apk add завершился с кодом $code$cause")
                 }
                 apkMarker.writeText(installer.opencodeVersion)
             }

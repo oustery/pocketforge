@@ -1,6 +1,8 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <!-- M2/M4: opencode serve на 127.0.0.1 + HTTPS GitHub (релизы, Device Flow) -->
     <uses-permission android:name="android.permission.INTERNET"/>
+    <!-- M8: чтение DNS-серверов оператора (LinkProperties) для resolv.conf песочницы -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
     <!-- M6: установка update-APK (in-app update без Play Store) -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
     <!-- M1: foreground-сервис держит proot+opencode живым в фоне -->

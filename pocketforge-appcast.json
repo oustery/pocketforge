@@ -1,5 +1,5 @@
 {
-  "version": "0.3.3",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.3-arm64.apk",
-  "notes": "Диагностика ошибок: реальная причина сбоя теперь видна на экране и в терминале; загрузка артефактов устойчивее на мобильных сетях (докачка, 5 попыток, прогресс в %)"
+  "version": "0.3.4",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.4-arm64.apk",
+  "notes": "Сеть внутри песочницы: DNS оператора вместо заблокированных 8.8.8.8 (apk add больше не должен падать с «нет сети»); apk.log виден в панели лога и в карточке ошибки; 2 попытки bootstrap"
 }
