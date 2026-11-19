@@ -40,8 +40,8 @@ fvm flutter build apk --release --target-platform android-arm64
 ## Архитектура (кратко)
 
 - **Песочница**: proot 5.3.0 (static, aarch64) как `libproot.so` + Alpine
-  minirootfs 3.24.4 (asset) + opencode 1.19.6 (musl-arm64, скачивается,
-  sha256 из `assets/artifacts.json`). Serve на `127.0.0.1:<random>`,
+  minirootfs 3.24.4 и opencode 1.19.6 (musl-arm64; оба скачиваются при первом
+  запуске, sha256 из `assets/artifacts.json`). Serve на `127.0.0.1:<random>`,
   Basic-пароль 128 бит на запуск.
 - **Runtime**: Kotlin-сервис `RuntimeService` (foreground service, wake lock,
   watchdog). Dart — через MethodChannel `pocketforge/sandbox`.

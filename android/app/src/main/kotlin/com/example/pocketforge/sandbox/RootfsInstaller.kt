@@ -5,7 +5,7 @@ import java.io.File
 import java.io.IOException
 import org.json.JSONObject
 
-/// Установка rootfs (из assets APK) и бинарника opencode (скачивание),
+/// Установка rootfs (скачивание по манифесту) и бинарника opencode (скачивание),
 /// с проверкой sha256 по assets/artifacts.json.
 class RootfsInstaller(private val ctx: Context) {
 
@@ -38,12 +38,16 @@ class RootfsInstaller(private val ctx: Context) {
         // распаковка с нуля (частичная установка недопустима)
         rootfs.deleteRecursively()
         rootfs.mkdirs()
-        val asset = artifacts.getJSONObject("rootfs").getString("asset")
-        val expected = artifacts.getJSONObject("rootfs").getString("sha256")
-        val tmp = File(SandboxPaths.artifacts(ctx), "rootfs-verify.tar.gz")
-        copyAssetWithSha(asset, tmp, expected)
-        TarExtractor.extract(tmp, rootfs)
-        tmp.delete()
+        // rootfs не бандлим в APK (AGP ненадёжно пакует tar.gz в assets) —
+        // скачиваем с Alpine CDN и проверяем sha256, как и opencode
+        val rootfsCfg = artifacts.getJSONObject("rootfs")
+        val tar = ArtifactsDownloader.download(
+            url = rootfsCfg.getString("url"),
+            dest = File(SandboxPaths.artifacts(ctx), "rootfs-$wanted.tar.gz"),
+            expectedSha256 = rootfsCfg.getString("sha256"),
+        )
+        TarExtractor.extract(tar, rootfs)
+        tar.delete()
 
         // DNS внутри песочницы: у Android нет /etc/resolv.conf — пишем публичные
         val resolv = File(rootfs, "etc/resolv.conf")
@@ -76,32 +80,5 @@ class RootfsInstaller(private val ctx: Context) {
         extracted.delete()
         marker.writeText(oc.getString("version"))
         return binary
-    }
-
-    private fun copyAssetWithSha(assetPath: String, dest: File, expectedSha256: String) {
-        val md = java.security.MessageDigest.getInstance("SHA-256")
-        val stream = try {
-            ctx.assets.open(assetPath)
-        } catch (e: IOException) {
-            throw IOException("Ассет '$assetPath' не найден в assets APK", e)
-        }
-        stream.use { input ->
-            dest.outputStream().use { out ->
-                val buf = ByteArray(64 * 1024)
-                while (true) {
-                    val n = input.read(buf)
-                    if (n <= 0) break
-                    out.write(buf, 0, n)
-                    md.update(buf, 0, n)
-                }
-            }
-        }
-        val actual = md.digest().joinToString("") { "%02x".format(it) }
-        if (!actual.equals(expectedSha256, ignoreCase = true)) {
-            dest.delete()
-            throw ArtifactsDownloader.ChecksumMismatchException(
-                "rootfs: ожидалось $expectedSha256, получено $actual",
-            )
-        }
     }
 }

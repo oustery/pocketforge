@@ -1,5 +1,5 @@
 {
   "version": "0.3.1",
   "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.1-arm64.apk",
-  "notes": "Хотфикс: манифест артефактов и rootfs перенесены в нативные assets APK — запуск песочницы больше не падает с ошибкой artifacts.json"
+  "notes": "Хотфикс: запуск песочницы больше не падает с ошибкой artifacts.json (манифест — в нативных assets APK); rootfs теперь скачивается при первом запуске (нужен интернет)"
 }

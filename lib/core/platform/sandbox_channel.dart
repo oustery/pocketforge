@@ -8,7 +8,7 @@ enum SandboxPhase {
   /// Песочница не инициализирована (после полного сброса).
   uninitialized,
 
-  /// Распаковка Alpine rootfs из assets.
+  /// Скачивание и распаковка Alpine rootfs (по манифесту артефактов).
   installingRootfs,
 
   /// Скачивание бинарника opencode (arm64-musl).

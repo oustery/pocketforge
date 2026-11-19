@@ -61,19 +61,22 @@
 
 Первый запуск песочницы на устройстве падал с ошибкой artifacts.json.
 
-- **Причина**: манифест `artifacts.json` и tarball rootfs были объявлены как
-  Flutter-ассеты (в APK они попадают в `assets/flutter_assets/…`), а
-  `RootfsInstaller` читал их Android-AssetManager'ом — `ctx.assets.open(...)`
-  смотрит в корень APK `assets/`, где этих файлов не было →
-  `FileNotFoundException` при `startSandbox`. Dart-тесты и analyze этого не
-  видят: нативные Kotlin-тесты в CI отсутствуют.
-- **Фикс**: оба файла перенесены в `android/app/src/main/assets/` (из него
-  Gradle кладёт их в корень `assets/` APK, где их находит AssetManager);
-  путь rootfs в манифесте сокращён до `rootfs/…`; из pubspec убраны
-  мёртвые Flutter-asset-записи.
-- **Регрессия**: в release.yml добавлен шаг, который до публикации
-  проверяет наличие `assets/artifacts.json` и
-  `assets/rootfs/alpine-minirootfs-…tar.gz` в собранном APK.
+- **Причина**: манифест `artifacts.json` был объявлен как Flutter-ассет (в APK
+  он попадает в `assets/flutter_assets/…`), а `RootfsInstaller` читал его
+  Android-AssetManager'ом — `ctx.assets.open(...)` смотрит в корень APK
+  `assets/`, где файла не было → `FileNotFoundException` при `startSandbox`.
+  Dart-тесты и analyze этого не видят: нативные Kotlin-тесты в CI отсутствуют.
+- **Фикс манифеста**: `artifacts.json` перенесён в `android/app/src/main/assets/`
+  (Gradle кладёт его в корень `assets/` APK); из pubspec убраны мёртвые
+  Flutter-asset-записи.
+- **Фикс rootfs**: попытка положить tarball рядом с манифестом показала, что
+  AGP/Flutter-сборка не пакует `*.tar.gz` из `src/main/assets` в APK (регрессия
+  в CI это поймала). Rootfs больше не бандлится: скачивается при первом
+  запуске с Alpine CDN по URL из манифеста, sha256 проверяется существующим
+  `ArtifactsDownloader` (тот же путь, что у opencode). APK легче на ~4 МБ,
+  сборка не зависит от капризов упаковки ассетов.
+- **Регрессия**: в release.yml добавлен шаг, который до публикации проверяет
+  наличие `assets/artifacts.json` в собранном APK.
 - **UX ошибок**: `RootfsInstaller` оборачивает отсутствие манифеста/ассета в
   IOException с явным текстом (где файл должен лежать).
 - **Версия 0.3.1+4** — обновление увидят устройства на 0.3.0 (semver-сравнение
