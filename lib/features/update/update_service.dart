@@ -139,6 +139,17 @@ class UpdateService {
   Future<void> openInstallPermissionSettings() async {
     await _channel.invokeMethod<void>('openInstallPermissionSettings');
   }
+
+  /// Право на установку APK (REQUEST_INSTALL_PACKAGES, M8).
+  ///
+  /// На платформах без канала (тесты) возвращает false.
+  Future<bool> canRequestInstall() async {
+    try {
+      return await _channel.invokeMethod<bool>('canRequestInstall') ?? false;
+    } on Exception {
+      return false;
+    }
+  }
 }
 
 /// Сравнение семантических версий: -1 / 0 / 1.

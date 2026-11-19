@@ -48,10 +48,14 @@ class SettingsPage extends StatelessWidget {
             onTap: () => context.push('/auth/openai'),
           ),
           const ListTile(
-            leading: Icon(Icons.cloud_off),
-            title: Text('Режим полёта'),
-            subtitle: Text('Политики сети и разрешений — M8'),
+            leading: Icon(Icons.policy_outlined),
+            title: Text('Политики сети (M8)'),
+            subtitle: Text(
+              'cleartext — только 127.0.0.1 (opencode); '
+              'релизы и OAuth — HTTPS GitHub',
+            ),
           ),
+          const InstallPermissionRow(),
           const Divider(height: 24),
           const UpdateSection(),
         ],
@@ -222,6 +226,65 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
             ),
           ),
       ],
+    );
+  }
+}
+
+/// M8: статус права на установку APK (REQUEST_INSTALL_PACKAGES) с быстрым
+/// переходом в системные настройки, если право не выдано.
+class InstallPermissionRow extends ConsumerStatefulWidget {
+  /// Создаёт строку статуса.
+  const InstallPermissionRow({super.key});
+
+  @override
+  ConsumerState<InstallPermissionRow> createState() =>
+      _InstallPermissionRowState();
+}
+
+class _InstallPermissionRowState
+    extends ConsumerState<InstallPermissionRow> {
+  bool? _granted;
+
+  @override
+  void initState() {
+    super.initState();
+    unawaited(_refresh());
+  }
+
+  Future<void> _refresh() async {
+    final granted = await ref.read(updateServiceProvider).canRequestInstall();
+    if (mounted) {
+      setState(() => _granted = granted);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final granted = _granted;
+    return ListTile(
+      leading: Icon(
+        granted == null
+            ? Icons.help_outline
+            : granted
+                ? Icons.check_circle_outline
+                : Icons.error_outline,
+      ),
+      title: const Text('Право на установку APK'),
+      subtitle: Text(
+        granted == null
+            ? 'Проверяется…'
+            : granted
+                ? 'Разрешено — in-app обновления ставятся без вопросов'
+                : 'Нет — откройте системные настройки и разрешите установку',
+      ),
+      onTap: granted == false
+          ? () async {
+              await ref
+                  .read(updateServiceProvider)
+                  .openInstallPermissionSettings();
+              await _refresh();
+            }
+          : null,
     );
   }
 }

@@ -72,6 +72,27 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
     }
   }
 
+  /// Подставляет команду из истории (вверх); у дна — самая старая.
+  void _historyUp() {
+    final cmd = _session.historyUp();
+    if (cmd != null) {
+      _input
+        ..text = cmd
+        ..selection = TextSelection.collapsed(offset: cmd.length);
+    }
+  }
+
+  /// Подставляет команду из истории (вниз); ниже последней — пустой ввод.
+  void _historyDown() {
+    final cmd = _session.historyDown();
+    if (cmd == null) {
+      return;
+    }
+    _input
+      ..text = cmd
+      ..selection = TextSelection.collapsed(offset: cmd.length);
+  }
+
   @override
   Widget build(BuildContext context) {
     final sandbox = ref.watch(sandboxControllerProvider);
@@ -134,6 +155,16 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
                     ),
                   ),
                   const SizedBox(width: 8),
+                  IconButton(
+                    onPressed: ready ? () => setState(_historyUp) : null,
+                    icon: const Icon(Icons.arrow_upward),
+                    tooltip: 'Из истории (вверх)',
+                  ),
+                  IconButton(
+                    onPressed: ready ? () => setState(_historyDown) : null,
+                    icon: const Icon(Icons.arrow_downward),
+                    tooltip: 'Из истории (вниз)',
+                  ),
                   IconButton.filled(
                     onPressed: ready ? () => unawaited(_run()) : null,
                     icon: _running

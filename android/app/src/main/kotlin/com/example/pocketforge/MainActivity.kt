@@ -75,6 +75,10 @@ class MainActivity : FlutterActivity() {
         updateChannel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "version" -> result.success(appVersionName())
+                "canRequestInstall" -> {
+                    // M8: статус права REQUEST_INSTALL_PACKAGES для настроек.
+                    result.success(packageManager.canRequestPackageInstalls())
+                }
                 "installApk" -> {
                     val path = call.argument<String>("path")
                     if (path.isNullOrBlank()) {
