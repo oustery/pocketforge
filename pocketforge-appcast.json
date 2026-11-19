@@ -1,0 +1,5 @@
+{
+  "version": "0.2.0",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.2.0-arm64.apk",
+  "notes": "M7: терминал песочницы (обзор + команды в proot); релизные APK подписаны release-ключом PocketForge"
+}

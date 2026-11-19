@@ -33,6 +33,20 @@ jobs:
           channel: stable
           cache: true
 
+      - name: Расшифровать release-keystore из секретов
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        env:
+          KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          echo "$KEYSTORE_B64" | base64 -d > "$RUNNER_TEMP/release.keystore"
+          echo "ANDROID_KEYSTORE_PATH=$RUNNER_TEMP/release.keystore" >> "$GITHUB_ENV"
+          echo "ANDROID_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_ALIAS=$KEY_ALIAS" >> "$GITHUB_ENV"
+          echo "ANDROID_KEY_PASSWORD=$KEY_PASSWORD" >> "$GITHUB_ENV"
+
       - name: Проверки (pub get + analyze + test)
         run: |
           flutter pub get
@@ -42,10 +56,16 @@ jobs:
       - name: Сборка release-APK (arm64)
         run: flutter build apk --release --target-platform android-arm64
 
-      - name: Переименовать APK под тег релиза
+      - name: Переименовать APK (имя по версии — стабильно для appcast)
         run: |
-          TAG="${{ steps.ver.outputs.tag }}"
-          cp build/app/outputs/flutter-apk/app-release.apk "pocketforge-$TAG-arm64.apk"
+          VER="${{ steps.ver.outputs.ver }}"
+          cp build/app/outputs/flutter-apk/app-release.apk "pocketforge-v$VER-arm64.apk"
+
+      - name: Проверить подпись (apksigner)
+        if: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+        run: |
+          APKSIGNER="$(ls "$ANDROID_HOME"/build-tools/*/apksigner | sort | tail -1)"
+          "$APKSIGNER" verify --print-certs build/app/outputs/flutter-apk/app-release.apk
 
       - name: Опубликовать GitHub Release
         uses: softprops/action-gh-release@v2
@@ -55,7 +75,7 @@ jobs:
           body: |
             Автоматическая сборка из `main` (коммит ${{ github.sha }}).
 
-            - release-APK для arm64 (подписан debug-ключом — устанавливается на устройство)
+            - release-APK для arm64, подписан release-ключом PocketForge (alias `pocketforge`)
             - до сборки прогнаны flutter analyze и flutter test
           draft: false
           prerelease: false

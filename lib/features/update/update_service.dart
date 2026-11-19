@@ -8,10 +8,10 @@ import 'package:flutter/services.dart';
 /// Конфигурация in-app update.
 ///
 /// `manifestUrl` — JSON-манифест: {"version":"1.2.3","apkUrl":"…","notes":"…"}.
-/// Значение по умолчанию — плейсхолдер репозитория релизов; настраивается
-/// при публикации (см. отчёт M6).
+/// По умолчанию — appcast этого репозитория (M7): файл обновляется вместе
+/// с релизами, APK-имя стабильно (`pocketforge-v<версия>-arm64.apk`).
 const String kDefaultManifestUrl =
-    'https://raw.githubusercontent.com/pocketforge/pocketforge/main/'
+    'https://raw.githubusercontent.com/oustery/pocketforge/main/'
     'pocketforge-appcast.json';
 
 /// Результат проверки обновления.

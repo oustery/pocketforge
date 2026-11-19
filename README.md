@@ -27,6 +27,16 @@ fvm flutter build apk --release --target-platform android-arm64
 
 Без fvm: `flutter --version` должна быть 3.50.0.
 
+## Установка
+
+Скачайте подписанный APK со страницы [Releases](https://github.com/oustery/pocketforge/releases/latest)
+(`pocketforge-v*-arm64.apk`) и установите на устройство arm64 (Android 8.0+).
+
+- Подпись: alias `pocketforge`, сертификат SHA256
+  `64:AA:63:19:41:D8:38:DA:0A:3E:3A:83:A6:9B:16:BA:F7:E8:5A:15:65:E8:A8:B5:90:E6:B4:EC:54:AE:12:72`.
+- Обновления — прямо в приложении: **Настройки → Проверить обновления**
+  (appcast: `pocketforge-appcast.json` в этом репозитории).
+
 ## Архитектура (кратко)
 
 - **Песочница**: proot 5.3.0 (static, aarch64) как `libproot.so` + Alpine
@@ -46,11 +56,11 @@ fvm flutter build apk --release --target-platform android-arm64
 - [x] **M0** — скелет проекта, CI, структура feature-first
 - [x] **M1** — runtime-ядро: песочница (rootfs/opencode/apk/proot/health/watchdog)
 - [x] **M2** — API-клиент OpenCode (188 операций, SSE, интеграционные тесты)
-- [ ] **M3** — авторизация (opencode OAuth через API, GitHub Device Flow)
-- [ ] **M4** — чат MVP
-- [ ] **M5** — git-интеграция
-- [ ] **M6** — in-app update
-- [ ] **M7** — обзор/терминал
+- [x] **M3** — авторизация (opencode OAuth через API, GitHub Device Flow)
+- [x] **M4** — чат MVP
+- [x] **M5** — git-интеграция
+- [x] **M6** — in-app update (+ release-подпись из CI-секретов)
+- [x] **M7** — обзор/терминал (exec в песочнице + appcast этого репо)
 - [ ] **M8** — полировка и бета
 
 ## Регенерация API-клиента

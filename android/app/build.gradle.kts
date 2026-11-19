@@ -29,11 +29,32 @@ android {
         versionName = flutter.versionName
     }
 
+    signingConfigs {
+        create("release") {
+            // Релизный ключ приходит из CI-секретов через env (см. release.yml).
+            // Локально (без env) config пуст — release падает на debug-ключ.
+            val storePath = System.getenv("ANDROID_KEYSTORE_PATH")
+            val storePass = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+            val alias = System.getenv("ANDROID_KEY_ALIAS")
+            val keyPass = System.getenv("ANDROID_KEY_PASSWORD")
+            if (storePath != null && storePass != null && alias != null && keyPass != null) {
+                storeFile = file(storePath)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+            }
+        }
+    }
+
     buildTypes {
         release {
-            // TODO(M6): собственный release-keystore из secrets.
-            // Signing with the debug keys for now, so `flutter run --release` works.
-            signingConfig = signingConfigs.getByName("debug")
+            signingConfig = if (signingConfigs.getByName("release").storeFile != null) {
+                signingConfigs.getByName("release")
+            } else {
+                // Локальная сборка без env: debug-ключ. TODO(M6) закрыт —
+                // CI подписывает release-ключом из секретов.
+                signingConfigs.getByName("debug")
+            }
         }
     }
 
