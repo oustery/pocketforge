@@ -120,12 +120,20 @@ void main() {
     await openApp(tester, _MemoryOnboardingStore(completed: true));
     expect(find.text('Сбросить песочницу'), findsNothing);
     final diagnostics = find.text('Диагностика песочницы');
-    await tester.scrollUntilVisible(diagnostics, 150);
+    await tester.scrollUntilVisible(
+      diagnostics,
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(diagnostics);
     await tester.pumpAndSettle();
 
     final reset = find.text('Сбросить песочницу');
-    await tester.scrollUntilVisible(reset, 150);
+    await tester.scrollUntilVisible(
+      reset,
+      150,
+      scrollable: find.byType(Scrollable).first,
+    );
     await tester.tap(reset);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Отмена'));
