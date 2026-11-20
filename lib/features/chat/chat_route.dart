@@ -1,10 +1,11 @@
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:go_router/go_router.dart';
+import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/chat/chat_controller.dart';
 import 'package:pocketforge/features/chat/chat_page.dart';
-import 'package:pocketforge/features/git/git_controller.dart';
 
-/// Обёртка маршрута чата: выбирает активную сессию или создаёт первую.
+/// Выбор активной сессии; первая создаётся только по действию пользователя.
 class ChatRoute extends ConsumerStatefulWidget {
   /// Создаёт маршрут чата.
   const ChatRoute({super.key});
@@ -16,74 +17,81 @@ class ChatRoute extends ConsumerStatefulWidget {
 class _ChatRouteState extends ConsumerState<ChatRoute> {
   bool _creating = false;
 
+  Future<void> _newSession() async {
+    if (_creating) return;
+    setState(() => _creating = true);
+    try {
+      await ref.read(sessionsProvider.notifier).newSession();
+    } on Exception {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Не удалось создать чат. Попробуйте ещё раз.'),
+          ),
+        );
+      }
+    } finally {
+      if (mounted) setState(() => _creating = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final sessions = ref.watch(sessionsProvider);
-    return sessions.when(
-      loading: () => const Scaffold(
-        body: Center(child: CircularProgressIndicator()),
-      ),
-      error: (e, _) => Scaffold(
-        body: Center(
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              const Icon(Icons.cloud_off, size: 56),
-              const SizedBox(height: 12),
-              Padding(
-                padding: const EdgeInsets.all(16),
-                child: Text('Песочница недоступна: $e'),
+    final data = sessions.asData?.value;
+    final active = data?.activeId;
+    if (active != null) {
+      return ChatPage(
+        key: ValueKey(active),
+        sessionID: active,
+        onNewSession: _creating ? null : _newSession,
+      );
+    }
+    return Scaffold(
+      appBar: AppBar(title: const Text('Чат')),
+      body: SafeArea(
+        child: sessions.isLoading
+            ? const Center(
+                child: CircularProgressIndicator(
+                  semanticsLabel: 'Загружаем чаты',
+                ),
+              )
+            : sessions.hasError || data?.error != null
+            ? ForgeNotice(
+                icon: Icons.error_outline,
+                title: 'Не удалось загрузить чаты',
+                description:
+                    'Проверьте подключение к песочнице и повторите попытку.',
+                error: true,
+                action: FilledButton.tonal(
+                  onPressed: () => ref.invalidate(sessionsProvider),
+                  child: const Text('Повторить'),
+                ),
+              )
+            : ForgeNotice(
+                icon: Icons.chat_bubble_outline_rounded,
+                title: 'Начните разговор',
+                description:
+                    'Попросите OpenCode объяснить код или помочь с задачей. '
+                    'Если модель ещё не подключена, сделайте это в настройках.',
+                action: Wrap(
+                  alignment: WrapAlignment.center,
+                  spacing: 8,
+                  runSpacing: 8,
+                  children: [
+                    FilledButton.icon(
+                      onPressed: _creating ? null : _newSession,
+                      icon: const Icon(Icons.add_rounded),
+                      label: Text(_creating ? 'Создаём чат…' : 'Новый чат'),
+                    ),
+                    TextButton(
+                      onPressed: () => context.push('/settings'),
+                      child: const Text('Подключить модель'),
+                    ),
+                  ],
+                ),
               ),
-              FilledButton(
-                onPressed: () => Navigator.of(context).pop(),
-                child: const Text('На главный экран'),
-              ),
-            ],
-          ),
-        ),
       ),
-      data: (s) {
-        final active = s.activeId;
-        if (active != null) {
-          // Отложенное git-действие: отправить агенту и сбросить.
-          final pending = ref.read(pendingGitActionProvider);
-          if (pending != null) {
-            ref.read(pendingGitActionProvider.notifier).submit(null);
-            WidgetsBinding.instance.addPostFrameCallback((_) async {
-              try {
-                await ref
-                    .read(chatControllerProvider(active).notifier)
-                    .send(pending);
-              } on Exception catch (e) {
-                ref.read(pendingGitActionProvider.notifier).submit(
-                    'Не удалось отправить git-действие: $e',
-                  );
-              }
-            });
-          }
-          return ChatPage(sessionID: active);
-        }
-        if (_creating) {
-          return const Scaffold(
-            body: Center(child: CircularProgressIndicator()),
-          );
-        }
-        // Нет активной сессии — создаём первую.
-        WidgetsBinding.instance.addPostFrameCallback((_) async {
-          if (!mounted) return;
-          setState(() => _creating = true);
-          try {
-            await ref.read(sessionsProvider.notifier).newSession();
-          } on Exception {
-            // ошибка уйдёт в состояние sessionsProvider
-          } finally {
-            if (mounted) setState(() => _creating = false);
-          }
-        });
-        return const Scaffold(
-          body: Center(child: CircularProgressIndicator()),
-        );
-      },
     );
   }
 }

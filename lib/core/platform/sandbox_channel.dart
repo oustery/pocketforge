@@ -32,8 +32,11 @@ enum SandboxPhase {
 
 /// Превращает имя фазы с нативной стороны в [SandboxPhase]; неизвестное
 /// имя мапится в [SandboxPhase.error].
-SandboxPhase sandboxPhaseFromName(String? name) => SandboxPhase.values
-    .firstWhere((p) => p.name == name, orElse: () => SandboxPhase.error);
+SandboxPhase sandboxPhaseFromName(String? name) =>
+    SandboxPhase.values.firstWhere(
+      (p) => p.name.toLowerCase() == name?.replaceAll('_', '').toLowerCase(),
+      orElse: () => SandboxPhase.error,
+    );
 
 /// Снимок состояния песочницы, приходящий с нативной стороны.
 @immutable
@@ -84,12 +87,24 @@ class SandboxState {
   /// Последняя ошибка установки/запуска.
   final String? lastError;
 
+  /// Продолжается установка или запуск окружения.
+  bool get preparing => switch (phase) {
+    SandboxPhase.installingRootfs ||
+    SandboxPhase.downloadingOpencode ||
+    SandboxPhase.bootstrappingApk ||
+    SandboxPhase.starting => true,
+    _ => false,
+  };
+
+  /// Инструменты могут работать с запущенной песочницей.
+  bool get isReady => phase == SandboxPhase.ready && healthy;
+
   /// Метка healthcheck для UI.
   String get healthLabel => switch (phase) {
-        SandboxPhase.ready when healthy => 'OK (200 с Basic-паролем)',
-        SandboxPhase.ready => 'проверяется…',
-        _ => '—',
-      };
+    SandboxPhase.ready when healthy => 'OK (200 с Basic-паролем)',
+    SandboxPhase.ready => 'проверяется…',
+    _ => '—',
+  };
 }
 
 /// Результат команды в песочнице (M7 терминал).
@@ -156,6 +171,10 @@ class SandboxChannel {
     final res = await _channel.invokeMethod<Object?>('status');
     return SandboxState.fromMap(res);
   }
+
+  /// Получает пароль только для текущего локального подключения.
+  Future<String?> connectionPassword(int port) =>
+      _channel.invokeMethod<String>('connectionPassword', {'port': port});
 
   /// Запуск песочницы через RuntimeService (startForegroundService).
   Future<void> start() => _channel.invokeMethod<void>('start');

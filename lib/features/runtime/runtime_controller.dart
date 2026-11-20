@@ -2,7 +2,6 @@ import 'dart:async';
 
 import 'package:flutter/services.dart' show PlatformException;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:pocketforge/core/platform/sandbox_channel.dart';
 
 /// Провайдер типизированного моста к нативному сервису песочницы.
@@ -37,6 +36,7 @@ class SandboxController extends AsyncNotifier<SandboxState> {
             cur.phase != s.phase ||
             cur.message != s.message ||
             cur.healthy != s.healthy ||
+            cur.port != s.port ||
             cur.progress != s.progress ||
             cur.logTail != s.logTail ||
             cur.lastError != s.lastError) {
@@ -79,5 +79,5 @@ class SandboxController extends AsyncNotifier<SandboxState> {
 /// Провайдер контроллера песочницы для UI.
 final sandboxControllerProvider =
     AsyncNotifierProvider<SandboxController, SandboxState>(
-  SandboxController.new,
-);
+      SandboxController.new,
+    );

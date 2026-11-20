@@ -28,10 +28,25 @@ void main() {
       expect(s.message, isEmpty);
     });
 
+    test('распознаёт имена этапов установки Android', () {
+      const phases = {
+        'installing_rootfs': SandboxPhase.installingRootfs,
+        'downloading_opencode': SandboxPhase.downloadingOpencode,
+        'bootstrapping_apk': SandboxPhase.bootstrappingApk,
+        'starting': SandboxPhase.starting,
+      };
+      for (final entry in phases.entries) {
+        final state = SandboxState.fromMap({'phase': entry.key});
+        expect(state.phase, entry.value);
+        expect(state.preparing, isTrue);
+        expect(state.isReady, isFalse);
+      }
+    });
+
     test('неизвестная фаза мапится в error', () {
-      final s = SandboxState.fromMap(
-        const <String, Object?>{'phase': 'future_phase'},
-      );
+      final s = SandboxState.fromMap(const <String, Object?>{
+        'phase': 'future_phase',
+      });
       expect(s.phase, SandboxPhase.error);
     });
   });

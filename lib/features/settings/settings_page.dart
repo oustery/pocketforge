@@ -1,133 +1,102 @@
 import 'dart:async';
-
 import 'dart:io';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:material_ui/material_ui.dart';
-
+import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
 import 'package:pocketforge/features/update/update_service.dart';
-
-/// Экспорт логов песочницы (boot.log, apk.log, serve.log + meta) в zip
-/// через системный share-шит — для разбора ошибок запуска на устройстве.
-class LogsExportRow extends ConsumerStatefulWidget {
-  /// Создаёт строку.
-  const LogsExportRow({super.key});
-
-  @override
-  ConsumerState<LogsExportRow> createState() => _LogsExportRowState();
-}
-
-class _LogsExportRowState extends ConsumerState<LogsExportRow> {
-  bool _busy = false;
-  String? _status;
-  String? _error;
-
-  Future<void> _export() async {
-    setState(() {
-      _busy = true;
-      _status = null;
-      _error = null;
-    });
-    try {
-      final path = await ref.read(sandboxChannelProvider).exportLogs();
-      if (!mounted) return;
-      if (path == null) {
-        setState(() {
-          _busy = false;
-          _status = 'Экспорт недоступен на этом устройстве';
-        });
-        return;
-      }
-      setState(() {
-        _busy = false;
-        _status =
-            'Логи собраны, откроется окно отправки: ${path.split('/').last}';
-      });
-    } on Exception catch (e) {
-      if (mounted) {
-        setState(() {
-          _busy = false;
-          _error = e.toString();
-        });
-      }
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return ListTile(
-      leading: _busy
-          ? const SizedBox(
-              width: 18,
-              height: 18,
-              child: CircularProgressIndicator(strokeWidth: 2),
-            )
-          : const Icon(Icons.folder_zip_outlined),
-      title: const Text('Экспорт логов'),
-      subtitle: Text(
-        _error != null
-            ? 'Ошибка: $_error'
-            : (_status ?? 'boot/apk/serve — одним zip через системное окно'),
-      ),
-      onTap: _busy ? null : _export,
-    );
-  }
-}
 
 /// Провайдер UpdateService.
 final updateServiceProvider = Provider<UpdateService>((_) => UpdateService());
 
-/// Настройки: авторизация провайдеров (M3), песочница, обновления (M6).
-class SettingsPage extends StatelessWidget {
+/// Настройки: провайдеры, обновления и справка.
+class SettingsPage extends ConsumerWidget {
   /// Создаёт страницу настроек.
   const SettingsPage({super.key});
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
+    final ready = ref.watch(
+      sandboxControllerProvider.select(
+        (value) => value.asData?.value.isReady ?? false,
+      ),
+    );
     return Scaffold(
       appBar: AppBar(title: const Text('Настройки')),
-      body: ListView(
-        children: [
-          const ListTile(
-            leading: Icon(Icons.memory),
-            title: Text('Песочница'),
-            subtitle: Text('Управление — на главном экране (M1)'),
+      body: SafeArea(
+        child: ForgeFrame(
+          child: ListView(
+            padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+            children: [
+              const ForgeSectionTitle('Провайдеры моделей'),
+              if (!ready)
+                const Padding(
+                  padding: EdgeInsets.only(bottom: 12),
+                  child: Text(
+                    'Запустите песочницу в обзоре, чтобы подключить модель.',
+                  ),
+                ),
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    for (final (index, (id, name)) in const [
+                      ('anthropic', 'Anthropic'),
+                      ('github-copilot', 'GitHub Copilot'),
+                      ('openai', 'OpenAI'),
+                    ].indexed) ...[
+                      if (index > 0)
+                        const Divider(height: 1, indent: 16, endIndent: 16),
+                      ListTile(
+                        leading: const Icon(Icons.key_outlined),
+                        title: Text(name),
+                        trailing: const Icon(Icons.chevron_right_rounded),
+                        enabled: ready,
+                        onTap: ready ? () => context.push('/auth/$id') : null,
+                      ),
+                    ],
+                  ],
+                ),
+              ),
+              const ForgeSectionTitle('Приложение'),
+              const Card(
+                child: Column(
+                  children: [
+                    UpdateSection(),
+                    Divider(height: 1, indent: 16, endIndent: 16),
+                    InstallPermissionRow(),
+                  ],
+                ),
+              ),
+              const ForgeSectionTitle('Справка'),
+              Card(
+                clipBehavior: Clip.antiAlias,
+                child: Column(
+                  children: [
+                    ListTile(
+                      leading: const Icon(Icons.auto_stories_outlined),
+                      title: const Text('Знакомство с PocketForge'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => context.push('/welcome?replay=1'),
+                    ),
+                    const Divider(height: 1, indent: 16, endIndent: 16),
+                    ListTile(
+                      leading: const Icon(Icons.description_outlined),
+                      title: const Text('Лицензии'),
+                      trailing: const Icon(Icons.chevron_right_rounded),
+                      onTap: () => showLicensePage(
+                        context: context,
+                        applicationName: 'PocketForge',
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
           ),
-          const LogsExportRow(),
-          const ListTile(
-            leading: Icon(Icons.key_outlined),
-            title: Text('Авторизация провайдеров'),
-            subtitle: Text('OAuth через API opencode; токен — в песочнице'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.open_in_new),
-            title: const Text('Войти — Anthropic'),
-            onTap: () => context.push('/auth/anthropic'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.open_in_new),
-            title: const Text('Войти — GitHub Copilot'),
-            onTap: () => context.push('/auth/github-copilot'),
-          ),
-          ListTile(
-            leading: const Icon(Icons.open_in_new),
-            title: const Text('Войти — OpenAI'),
-            onTap: () => context.push('/auth/openai'),
-          ),
-          const ListTile(
-            leading: Icon(Icons.policy_outlined),
-            title: Text('Политики сети (M8)'),
-            subtitle: Text(
-              'cleartext — только 127.0.0.1 (opencode); '
-              'релизы и OAuth — HTTPS GitHub',
-            ),
-          ),
-          const InstallPermissionRow(),
-          const Divider(height: 24),
-          const UpdateSection(),
-        ],
+        ),
       ),
     );
   }
@@ -176,6 +145,8 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       if (!mounted) return;
       setState(() {
         _checking = false;
+        if (_pending?.version != res.version || !res.isUpdate)
+          _downloadedPath = null;
         _pending = res.isUpdate ? res : null;
         _status = res.isUpdate
             ? 'Доступно обновление: ${res.version}'
@@ -193,36 +164,41 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
 
   Future<void> _downloadAndInstall() async {
     final res = _pending;
-    if (res == null) return;
+    if (res == null || _downloading || _checking) return;
     setState(() {
       _downloading = true;
       _error = null;
     });
     try {
       final svc = ref.read(updateServiceProvider);
-      final dir = await getUpdatesDir();
-      final path = await svc.downloadApk(
-        res.apkUrl,
-        dir: dir,
-        onProgress: (received, total) {
-          if (mounted) setState(() => _received = received);
-        },
-      );
+      var path = _downloadedPath;
+      if (path == null || !await File(path).exists()) {
+        final dir = await getUpdatesDir();
+        path = await svc.downloadApk(
+          res.apkUrl,
+          dir: dir,
+          onProgress: (received, _) {
+            if (mounted) setState(() => _received = received);
+          },
+        );
+      }
       if (!mounted) return;
-      setState(() {
-        _downloadedPath = path;
-        _downloading = false;
-        _received = 0;
-      });
+      setState(() => _downloadedPath = path);
       final status = await svc.installApk(path);
       if (status == InstallStatus.needsPermission && mounted) {
+        setState(
+          () =>
+              _status = 'Разрешите установку в Android, затем вернитесь сюда.',
+        );
         await svc.openInstallPermissionSettings();
       }
     } on Exception catch (e) {
+      if (mounted) setState(() => _error = e.toString());
+    } finally {
       if (mounted) {
         setState(() {
           _downloading = false;
-          _error = e.toString();
+          _received = 0;
         });
       }
     }
@@ -252,37 +228,42 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
               : IconButton(
                   icon: const Icon(Icons.refresh),
                   tooltip: 'Проверить обновления',
-                  onPressed: _check,
+                  onPressed: _downloading ? null : _check,
                 ),
         ),
         if (_status != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
-            child: Text(
-              _status!,
-              style: Theme.of(context).textTheme.bodySmall,
-            ),
+            child: Text(_status!, style: Theme.of(context).textTheme.bodySmall),
           ),
-        if (_downloading)
+        if (_downloading && _downloadedPath == null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: Text('Скачивание… $_received байт',
-                style: Theme.of(context).textTheme.bodySmall),
+            child: Text(
+              'Скачано ${(_received / (1024 * 1024)).toStringAsFixed(1)} МБ',
+              style: Theme.of(context).textTheme.bodySmall,
+            ),
           ),
         if (canInstall)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             child: FilledButton.icon(
-              onPressed: _downloading ? null : _downloadAndInstall,
-              icon: const Icon(Icons.download),
-              label: const Text('Скачать и установить'),
+              onPressed: _downloading || _checking ? null : _downloadAndInstall,
+              icon: Icon(
+                _downloadedPath == null ? Icons.download : Icons.install_mobile,
+              ),
+              label: Text(
+                _downloadedPath == null
+                    ? 'Скачать и установить'
+                    : 'Установить скачанное',
+              ),
             ),
           ),
         if (_downloadedPath != null)
           Padding(
             padding: const EdgeInsets.symmetric(horizontal: 16),
             child: Text(
-              'APK готов: $_downloadedPath',
+              'Установочный файл скачан',
               style: Theme.of(context).textTheme.bodySmall,
             ),
           ),
@@ -299,8 +280,7 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
   }
 }
 
-/// M8: статус права на установку APK (REQUEST_INSTALL_PACKAGES) с быстрым
-/// переходом в системные настройки, если право не выдано.
+/// Разрешение на установку APK и переход в настройки Android.
 class InstallPermissionRow extends ConsumerStatefulWidget {
   /// Создаёт строку статуса.
   const InstallPermissionRow({super.key});
@@ -310,14 +290,21 @@ class InstallPermissionRow extends ConsumerStatefulWidget {
       _InstallPermissionRowState();
 }
 
-class _InstallPermissionRowState
-    extends ConsumerState<InstallPermissionRow> {
+class _InstallPermissionRowState extends ConsumerState<InstallPermissionRow> {
   bool? _granted;
+  late final AppLifecycleListener _lifecycle;
 
   @override
   void initState() {
     super.initState();
+    _lifecycle = AppLifecycleListener(onResume: () => unawaited(_refresh()));
     unawaited(_refresh());
+  }
+
+  @override
+  void dispose() {
+    _lifecycle.dispose();
+    super.dispose();
   }
 
   Future<void> _refresh() async {
@@ -335,16 +322,16 @@ class _InstallPermissionRowState
         granted == null
             ? Icons.help_outline
             : granted
-                ? Icons.check_circle_outline
-                : Icons.error_outline,
+            ? Icons.check_circle_outline
+            : Icons.error_outline,
       ),
       title: const Text('Право на установку APK'),
       subtitle: Text(
         granted == null
             ? 'Проверяется…'
             : granted
-                ? 'Разрешено — in-app обновления ставятся без вопросов'
-                : 'Нет — откройте системные настройки и разрешите установку',
+            ? 'Разрешено. Android попросит подтвердить установку.'
+            : 'Нет — откройте системные настройки и разрешите установку',
       ),
       onTap: granted == false
           ? () async {

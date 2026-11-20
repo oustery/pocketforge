@@ -90,6 +90,15 @@ class RuntimeService : Service() {
             )
         }
 
+        // Только по запросу внутрипроцессного Flutter-канала; не часть статуса и логов.
+        fun connectionPassword(port: Int): String? = synchronized(stateLock) {
+            val svc = serviceInstance ?: return@synchronized null
+            val manager = svc.manager
+            manager.password.takeIf {
+                phase == Phase.READY && svc.healthy && manager.port == port && it.isNotBlank()
+            }
+        }
+
         fun stopSandbox(ctx: Context) {
             val intent = Intent(ctx, RuntimeService::class.java).setAction(ACTION_STOP)
             ctx.startService(intent)

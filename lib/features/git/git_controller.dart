@@ -1,17 +1,16 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:pocketforge/features/git/git_service.dart';
 
 /// Провайдер GitService (переопределяется в тестах).
-final gitServiceProvider =
-    Provider<GitService>((_) => throw UnimplementedError());
+final gitServiceProvider = Provider<GitService>(
+  (_) => throw UnimplementedError(),
+);
 
 /// Отложенное git-действие для git-агента в чате.
 ///
-/// GitPage кладёт промпт, ChatRoute после создания/выбора сессии
-/// отправляет его агенту и сбрасывает.
+/// GitPage кладёт промпт. Пользователь проверяет его в чате перед отправкой.
 class PendingGitAction extends Notifier<String?> {
   /// Загрузка: ничего не отложено.
   @override
@@ -24,8 +23,9 @@ class PendingGitAction extends Notifier<String?> {
 }
 
 /// Провайдер отложенного git-действия.
-final pendingGitActionProvider =
-    NotifierProvider<PendingGitAction, String?>(PendingGitAction.new);
+final pendingGitActionProvider = NotifierProvider<PendingGitAction, String?>(
+  PendingGitAction.new,
+);
 
 /// Состояние экрана git.
 class GitState {
@@ -82,11 +82,13 @@ class GitState {
 /// Контроллер git-экрана (read-only данные + передача мутаций агенту).
 class GitController extends AsyncNotifier<GitState> {
   @override
-  FutureOr<GitState> build() => _load('/root/project');
+  FutureOr<GitState> build() {
+    final service = ref.watch(gitServiceProvider);
+    return _load(service.workDir);
+  }
 
   Future<GitState> _load(String dir) async {
-    final service = ref.read(gitServiceProvider)
-      ..workDir = dir;
+    final service = ref.read(gitServiceProvider)..workDir = dir;
     try {
       final overview = await service.overview();
       return GitState(workDir: dir, overview: overview);
@@ -103,17 +105,13 @@ class GitController extends AsyncNotifier<GitState> {
       cur.copyWith(busy: true, clearError: true),
     );
     final fresh = await _load(cur.workDir);
-    state = AsyncValue<GitState>.data(
-      fresh.copyWith(busy: false),
-    );
+    state = AsyncValue<GitState>.data(fresh.copyWith(busy: false));
   }
 
   /// Меняет каталог репозитория.
   Future<void> setWorkDir(String dir) async {
     final cur = state.value ?? const GitState(workDir: '/root/project');
-    state = AsyncValue<GitState>.data(
-      cur.copyWith(workDir: dir, busy: true, clearError: true),
-    );
+    state = AsyncValue<GitState>.data(GitState(workDir: dir, busy: true));
     final fresh = await _load(dir);
     state = AsyncValue<GitState>.data(fresh.copyWith(busy: false));
   }
@@ -125,11 +123,7 @@ class GitController extends AsyncNotifier<GitState> {
     try {
       final patches = await ref.read(gitServiceProvider).diff();
       state = AsyncValue<GitState>.data(
-        cur.copyWith(
-          diff: [
-            for (final p in patches) (p.file, p.patch ?? ''),
-          ],
-        ),
+        cur.copyWith(diff: [for (final p in patches) (p.file, p.patch ?? '')]),
       );
     } on Exception catch (e) {
       state = AsyncValue<GitState>.data(cur.copyWith(error: e.toString()));
@@ -141,7 +135,7 @@ class GitController extends AsyncNotifier<GitState> {
   /// Возвращает текст сообщения пользователю; переход в чат выполняет UI.
   String requestAgentAction(String prompt) {
     ref.read(pendingGitActionProvider.notifier).submit(prompt);
-    return 'Промпт передан git-агенту';
+    return 'Черновик подготовлен';
   }
 
   /// Промпт git-агенту: клонирование репозитория.
@@ -164,5 +158,6 @@ class GitController extends AsyncNotifier<GitState> {
 }
 
 /// Провайдер git-контроллера.
-final gitControllerProvider =
-    AsyncNotifierProvider<GitController, GitState>(GitController.new);
+final gitControllerProvider = AsyncNotifierProvider<GitController, GitState>(
+  GitController.new,
+);

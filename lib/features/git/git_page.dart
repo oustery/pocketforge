@@ -1,10 +1,12 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
-import 'package:material_ui/material_ui.dart';
+import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/git/git_controller.dart';
 import 'package:pocketforge/features/git/git_parsers.dart';
+import 'package:pocketforge/features/git/git_service.dart';
 
 /// Экран git-интеграции: ветка, изменения, история; мутации — через
 /// git-агента (переносит промпт в чат-сессию).
@@ -19,158 +21,173 @@ class GitPage extends ConsumerWidget {
 
     return Scaffold(
       appBar: AppBar(
-        title: Text('Git', style: Theme.of(context).textTheme.titleMedium),
+        title: const Text('Git'),
         actions: [
           IconButton(
             icon: const Icon(Icons.refresh),
             tooltip: 'Обновить',
-            onPressed: ctrl.refresh,
-          ),
-          IconButton(
-            icon: const Icon(Icons.folder_open),
-            tooltip: 'Каталог репозитория',
-            onPressed: () => _workDirDialog(context, ctrl, state.value),
+            onPressed: state.value == null || state.value!.busy
+                ? null
+                : ctrl.refresh,
           ),
           PopupMenuButton<String>(
-            tooltip: 'Git-действия (через агента)',
-            onSelected: (v) => switch (v) {
-              'clone' => _cloneDialog(context, ctrl),
-              'commit' => _commitDialog(context, ctrl),
-              'pull' => unawaited(_runAgent(context, ctrl, ctrl.pullPrompt())),
-              'push' => unawaited(_runAgent(context, ctrl, ctrl.pushPrompt())),
-              'diff' => ctrl.loadDiff(),
-              'branches' => _branchesSheet(context, ctrl, state.value),
-              _ => null,
+            tooltip: 'Действия с репозиторием',
+            enabled: state.asData != null && state.value?.busy != true,
+            onSelected: (value) {
+              switch (value) {
+                case 'clone':
+                  _cloneDialog(context, ctrl);
+                case 'commit':
+                  _commitDialog(context, ctrl);
+                case 'pull':
+                  _openDraft(context, ctrl, ctrl.pullPrompt());
+                case 'push':
+                  _openDraft(context, ctrl, ctrl.pushPrompt());
+              }
             },
-            itemBuilder: (_) => const [
-              PopupMenuItem(value: 'clone', child: Text('Клонировать…')),
-              PopupMenuItem(value: 'commit', child: Text('Коммит…')),
-              PopupMenuItem(value: 'pull', child: Text('Pull (агент)')),
-              PopupMenuItem(value: 'push', child: Text('Push (агент)')),
-              PopupMenuItem(value: 'diff', child: Text('Показать diff')),
-              PopupMenuItem(value: 'branches', child: Text('Ветки…')),
+            itemBuilder: (_) => [
+              const PopupMenuItem(
+                value: 'clone',
+                child: Text('Клонировать через чат…'),
+              ),
+              if (_hasRepository(state.value?.overview)) ...const [
+                PopupMenuItem(
+                  value: 'commit',
+                  child: Text('Подготовить коммит…'),
+                ),
+                PopupMenuItem(value: 'pull', child: Text('Подготовить pull')),
+                PopupMenuItem(value: 'push', child: Text('Подготовить push')),
+              ],
             ],
           ),
         ],
       ),
-      body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Ошибка: $e')),
-        data: (s) => RefreshIndicator(
-          onRefresh: ctrl.refresh,
-          child: _GitBody(state: s, ctrl: ctrl),
+      body: SafeArea(
+        child: ForgeFrame(
+          child: state.when(
+            loading: () => const Center(
+              child: CircularProgressIndicator(
+                semanticsLabel: 'Загружаем репозиторий',
+              ),
+            ),
+            error: (_, _) => ForgeNotice(
+              icon: Icons.error_outline,
+              title: 'Репозиторий недоступен',
+              description:
+                  'Повторите загрузку или проверьте песочницу в обзоре.',
+              error: true,
+              action: OutlinedButton(
+                onPressed: () => ref.invalidate(gitControllerProvider),
+                child: const Text('Повторить'),
+              ),
+            ),
+            data: (s) => RefreshIndicator(
+              onRefresh: ctrl.refresh,
+              child: _GitBody(
+                state: s,
+                ctrl: ctrl,
+                onOpen: () => _workDirDialog(context, ctrl, s),
+                onClone: () => _cloneDialog(context, ctrl),
+                onBranches: () => _branchesSheet(context, ctrl, s),
+              ),
+            ),
+          ),
         ),
       ),
     );
   }
 
-  Future<void> _runAgent(
-    BuildContext context,
-    GitController ctrl,
-    String prompt,
-  ) async {
+  void _openDraft(BuildContext context, GitController ctrl, String prompt) {
     ctrl.requestAgentAction(prompt);
-    await context.push('/chat');
+    context.go('/chat');
   }
 
   void _workDirDialog(
     BuildContext context,
     GitController ctrl,
-    GitState? current,
+    GitState current,
   ) {
-    final controller =
-        TextEditingController(text: current?.workDir ?? '');
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Каталог репозитория'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Путь в песочнице',
-            hintText: '/root/project',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () {
-              Navigator.of(ctx).pop();
-              unawaited(ctrl.setWorkDir(controller.text.trim()));
-            },
-            child: const Text('Открыть'),
-          ),
-        ],
+    unawaited(
+      _askForText(
+        context,
+        title: 'Каталог репозитория',
+        label: 'Путь в песочнице',
+        initialValue: current.workDir,
+        hint: '/root/workspace/проект',
+        action: 'Открыть',
+        onAccepted: (path) => unawaited(ctrl.setWorkDir(path)),
       ),
     );
   }
 
   void _cloneDialog(BuildContext context, GitController ctrl) {
-    final controller = TextEditingController();
-    showDialog<void>(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Клонировать репозиторий'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'URL',
-            hintText: 'https://github.com/owner/repo.git',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text('Отмена'),
-          ),
-          FilledButton(
-            onPressed: () {
-              final url = controller.text.trim();
-              Navigator.of(ctx).pop();
-              if (url.isNotEmpty) {
-                unawaited(_runAgent(context, ctrl, ctrl.clonePrompt(url)));
-              }
-            },
-            child: const Text('Клонировать (агент)'),
-          ),
-        ],
+    unawaited(
+      _askForText(
+        context,
+        title: 'Клонировать репозиторий',
+        label: 'URL',
+        hint: 'https://github.com/owner/repo.git',
+        action: 'Подготовить в чате',
+        onAccepted: (url) => _openDraft(context, ctrl, ctrl.clonePrompt(url)),
       ),
     );
   }
 
   void _commitDialog(BuildContext context, GitController ctrl) {
-    final controller = TextEditingController();
-    showDialog<void>(
+    unawaited(
+      _askForText(
+        context,
+        title: 'Коммит изменений',
+        label: 'Сообщение коммита',
+        action: 'Подготовить в чате',
+        onAccepted: (message) =>
+            _openDraft(context, ctrl, ctrl.commitPrompt(message)),
+      ),
+    );
+  }
+
+  Future<void> _askForText(
+    BuildContext context, {
+    required String title,
+    required String label,
+    required String action,
+    required ValueChanged<String> onAccepted,
+    String initialValue = '',
+    String? hint,
+  }) async {
+    var value = initialValue;
+    final form = GlobalKey<FormState>();
+    final result = await showDialog<String>(
       context: context,
-      builder: (ctx) => AlertDialog(
-        title: const Text('Коммит изменений'),
-        content: TextField(
-          controller: controller,
-          decoration: const InputDecoration(
-            labelText: 'Сообщение коммита',
+      builder: (dialogContext) => AlertDialog(
+        title: Text(title),
+        content: Form(
+          key: form,
+          child: TextFormField(
+            initialValue: initialValue,
+            decoration: InputDecoration(labelText: label, hintText: hint),
+            validator: (input) =>
+                (input ?? '').trim().isEmpty ? 'Заполните поле' : null,
+            onSaved: (input) => value = input!.trim(),
           ),
         ),
         actions: [
           TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
+            onPressed: () => Navigator.of(dialogContext).pop(),
             child: const Text('Отмена'),
           ),
           FilledButton(
             onPressed: () {
-              final msg = controller.text.trim();
-              Navigator.of(ctx).pop();
-              if (msg.isNotEmpty) {
-                unawaited(_runAgent(context, ctrl, ctrl.commitPrompt(msg)));
-              }
+              if (!form.currentState!.validate()) return;
+              form.currentState!.save();
+              Navigator.of(dialogContext).pop(value);
             },
-            child: const Text('Коммит (агент)'),
+            child: Text(action),
           ),
         ],
       ),
     );
+    if (result != null && context.mounted) onAccepted(result);
   }
 
   void _branchesSheet(
@@ -186,10 +203,7 @@ class GitPage extends ConsumerWidget {
         child: ListView(
           shrinkWrap: true,
           children: [
-            const Padding(
-              padding: EdgeInsets.all(16),
-              child: Text('Ветки'),
-            ),
+            const Padding(padding: EdgeInsets.all(16), child: Text('Ветки')),
             for (final b in branches)
               ListTile(
                 leading: Icon(
@@ -201,15 +215,13 @@ class GitPage extends ConsumerWidget {
                     ? null
                     : IconButton(
                         icon: const Icon(Icons.swap_horiz, size: 18),
-                        tooltip: 'Переключиться (агент)',
+                        tooltip: 'Подготовить переключение в чате',
                         onPressed: () {
                           Navigator.of(ctx).pop();
-                          unawaited(
-                            _runAgent(
-                              context,
-                              ctrl,
-                              ctrl.checkoutPrompt(b.name),
-                            ),
+                          _openDraft(
+                            context,
+                            ctrl,
+                            ctrl.checkoutPrompt(b.name),
                           );
                         },
                       ),
@@ -223,19 +235,47 @@ class GitPage extends ConsumerWidget {
   }
 }
 
+bool _hasRepository(GitOverview? overview) =>
+    overview != null &&
+    (overview.head.branch.isNotEmpty || overview.head.oid.isNotEmpty);
+
 class _GitBody extends StatelessWidget {
-  const _GitBody({required this.state, required this.ctrl});
+  const _GitBody({
+    required this.state,
+    required this.ctrl,
+    required this.onOpen,
+    required this.onClone,
+    required this.onBranches,
+  });
 
   final GitState state;
   final GitController ctrl;
+  final VoidCallback onOpen;
+  final VoidCallback onClone;
+  final VoidCallback onBranches;
 
   @override
   Widget build(BuildContext context) {
     final o = state.overview;
     final diffs = state.diff;
     return ListView(
-      padding: const EdgeInsets.all(12),
+      physics: const AlwaysScrollableScrollPhysics(),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
+        Card(
+          clipBehavior: Clip.antiAlias,
+          child: ListTile(
+            leading: const Icon(Icons.folder_open_rounded),
+            title: const Text('Каталог репозитория'),
+            subtitle: Text(
+              state.workDir,
+              style: const TextStyle(fontFamily: 'monospace'),
+            ),
+            trailing: const Icon(Icons.edit_outlined),
+            onTap: state.busy ? null : onOpen,
+          ),
+        ),
+        const SizedBox(height: 12),
         if (state.error != null) _MessageCard(text: state.error!, error: true),
         if (state.message != null) _MessageCard(text: state.message!),
         if (state.busy)
@@ -243,7 +283,18 @@ class _GitBody extends StatelessWidget {
             padding: EdgeInsets.all(8),
             child: LinearProgressIndicator(),
           ),
-        if (o != null) ...[
+        if (!_hasRepository(o) && !state.busy)
+          ForgeNotice(
+            icon: Icons.account_tree_outlined,
+            title: 'Репозиторий не открыт',
+            description:
+                'Укажите каталог существующего репозитория или подготовьте клонирование через чат.',
+            action: FilledButton.tonal(
+              onPressed: onClone,
+              child: const Text('Клонировать через чат'),
+            ),
+          ),
+        if (o != null && _hasRepository(o)) ...[
           Card(
             child: Padding(
               padding: const EdgeInsets.all(12),
@@ -257,36 +308,26 @@ class _GitBody extends StatelessWidget {
                       Expanded(
                         child: Text(
                           o.head.detached
-                              ? 'detached @ ${o.head.oid.substring(0, 7)}'
-                              : (o.head.branch.isEmpty
-                                  ? '—'
-                                  : o.head.branch),
+                              ? 'detached @ ${o.head.oid.substring(0, o.head.oid.length < 7 ? o.head.oid.length : 7)}'
+                              : (o.head.branch.isEmpty ? '—' : o.head.branch),
                           style: Theme.of(context).textTheme.titleMedium,
                         ),
                       ),
-                      if (o.clean)
-                        const Chip(
-                          label: Text('чисто'),
-                          visualDensity: VisualDensity.compact,
-                        ),
                     ],
                   ),
-                  const SizedBox(height: 6),
-                  Text(
-                    state.workDir,
-                    style: Theme.of(context)
-                        .textTheme
-                        .bodySmall
-                        ?.copyWith(fontFamily: 'monospace'),
+                  Align(
+                    alignment: Alignment.centerLeft,
+                    child: TextButton.icon(
+                      onPressed: onBranches,
+                      icon: const Icon(Icons.account_tree_outlined),
+                      label: const Text('Ветки'),
+                    ),
                   ),
-                  const SizedBox(height: 4),
                   Builder(
                     builder: (context) {
                       final oid = o.head.oid;
-                      final max = oid.length.clamp(0, 12);
-                      final short = oid.isEmpty
-                          ? '—'
-                          : oid.substring(0, max);
+                      final max = oid.length < 12 ? oid.length : 12;
+                      final short = oid.isEmpty ? '—' : oid.substring(0, max);
                       return Text(
                         'HEAD: $short',
                         style: const TextStyle(fontFamily: 'monospace'),
@@ -297,21 +338,18 @@ class _GitBody extends StatelessWidget {
               ),
             ),
           ),
-          const SizedBox(height: 12),
-          Row(
-            children: [
-              Text('Изменения (${o.vcsFiles.length})',
-                  style: Theme.of(context).textTheme.titleSmall),
-              if (diffs != null) ...[
-                const SizedBox(width: 8),
-                TextButton(
-                  onPressed: ctrl.loadDiff,
-                  child: const Text('обновить diff'),
+          ForgeSectionTitle('Изменения (${o.vcsFiles.length})'),
+          if (o.vcsFiles.isNotEmpty)
+            Align(
+              alignment: Alignment.centerLeft,
+              child: OutlinedButton.icon(
+                onPressed: ctrl.loadDiff,
+                icon: const Icon(Icons.difference_outlined),
+                label: Text(
+                  diffs == null ? 'Показать различия' : 'Обновить различия',
                 ),
-              ],
-            ],
-          ),
-          const SizedBox(height: 4),
+              ),
+            ),
           if (o.vcsFiles.isEmpty)
             const ListTile(
               dense: true,
@@ -322,14 +360,11 @@ class _GitBody extends StatelessWidget {
             for (final f in o.vcsFiles)
               ListTile(
                 dense: true,
-                leading: Icon(
-                  switch (f.status) {
-                    'added' => Icons.add_circle_outline,
-                    'deleted' => Icons.remove_circle_outline,
-                    _ => Icons.edit_note,
-                  },
-                  size: 18,
-                ),
+                leading: Icon(switch (f.status) {
+                  'added' => Icons.add_circle_outline,
+                  'deleted' => Icons.remove_circle_outline,
+                  _ => Icons.edit_note,
+                }, size: 18),
                 title: Text(
                   f.file,
                   style: const TextStyle(fontFamily: 'monospace'),
@@ -341,7 +376,7 @@ class _GitBody extends StatelessWidget {
               ),
           if (diffs != null && diffs.isNotEmpty) ...[
             const SizedBox(height: 8),
-            for (final (file, patch) in diffs.take(3))
+            for (final (file, patch) in diffs)
               ExpansionTile(
                 title: Text(
                   file,
@@ -361,11 +396,7 @@ class _GitBody extends StatelessWidget {
                 ],
               ),
           ],
-          const SizedBox(height: 12),
-          Text(
-            'История (reflog)',
-            style: Theme.of(context).textTheme.titleSmall,
-          ),
+          const ForgeSectionTitle('Последние операции Git'),
           const SizedBox(height: 4),
           if (o.log.isEmpty)
             const ListTile(
@@ -373,8 +404,7 @@ class _GitBody extends StatelessWidget {
               leading: Icon(Icons.info_outline),
               title: Text('История недоступна'),
               subtitle: Text(
-                'Новые коммиты появятся здесь после commit/merge '
-                '(файл .git/logs/HEAD)',
+                'Здесь появятся записи после изменений текущей ветки.',
               ),
             )
           else
@@ -420,9 +450,7 @@ class _MessageCard extends StatelessWidget {
         child: SelectableText(
           text,
           style: error
-              ? TextStyle(
-                  color: Theme.of(context).colorScheme.onErrorContainer,
-                )
+              ? TextStyle(color: Theme.of(context).colorScheme.onErrorContainer)
               : null,
         ),
       ),

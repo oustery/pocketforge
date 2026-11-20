@@ -1,8 +1,8 @@
 import 'dart:async';
 
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:material_ui/material_ui.dart';
+import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/auth/auth_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
 
@@ -28,6 +28,7 @@ class _AuthPageState extends ConsumerState<AuthPage> {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
       unawaited(
         ref
             .read(authControllerProvider.notifier)
@@ -49,19 +50,33 @@ class _AuthPageState extends ConsumerState<AuthPage> {
     final ctrl = ref.read(authControllerProvider.notifier);
 
     return Scaffold(
-      appBar: AppBar(title: Text('Вход — ${widget.providerID}')),
-      body: state.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Ошибка: $e')),
-        data: (s) => _Body(
-          state: s,
-          providerID: widget.providerID,
-          ctrl: ctrl,
-          codeCtrl: _codeCtrl,
-          keyCtrl: _keyCtrl,
-          codeForm: _codeForm,
-          keyForm: _keyForm,
-          onLaunch: _launch,
+      appBar: AppBar(title: const Text('Подключение модели')),
+      body: SafeArea(
+        child: ForgeFrame(
+          child: state.when(
+            loading: () => const Center(child: CircularProgressIndicator()),
+            error: (_, _) => ForgeNotice(
+              icon: Icons.error_outline,
+              title: 'Не удалось загрузить способы входа',
+              description:
+                  'Проверьте готовность песочницы и повторите попытку.',
+              error: true,
+              action: OutlinedButton(
+                onPressed: () => ctrl.loadMethods(widget.providerID),
+                child: const Text('Повторить'),
+              ),
+            ),
+            data: (s) => _Body(
+              state: s,
+              providerID: widget.providerID,
+              ctrl: ctrl,
+              codeCtrl: _codeCtrl,
+              keyCtrl: _keyCtrl,
+              codeForm: _codeForm,
+              keyForm: _keyForm,
+              onLaunch: _launch,
+            ),
+          ),
         ),
       ),
     );
@@ -69,8 +84,21 @@ class _AuthPageState extends ConsumerState<AuthPage> {
 
   Future<void> _launch(String url) async {
     final uri = Uri.tryParse(url);
-    if (uri == null) return;
-    await launchUrl(uri, mode: LaunchMode.externalApplication);
+    var opened = false;
+    try {
+      if (uri != null && (uri.scheme == 'https' || uri.scheme == 'http')) {
+        opened = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } on Exception {
+      // Ссылка остаётся доступной для ручного копирования.
+    }
+    if (!opened && mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Не удалось открыть браузер. Скопируйте ссылку.'),
+        ),
+      );
+    }
   }
 }
 
@@ -97,47 +125,69 @@ class _Body extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final name = switch (providerID) {
+      'github-copilot' => 'GitHub Copilot',
+      'openai' => 'OpenAI',
+      'anthropic' => 'Anthropic',
+      _ => providerID,
+    };
     if (state.phase == AuthUiPhase.done) {
-      return Center(
-        child: Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const Icon(
-              Icons.check_circle_outline,
-              size: 72,
-              color: Colors.green,
-            ),
-            const SizedBox(height: 16),
-            Text('Авторизация $providerID выполнена'),
-            const SizedBox(height: 8),
-            FilledButton(
-              onPressed: () => Navigator.of(context).pop(),
-              child: const Text('Готово'),
-            ),
-          ],
+      return ForgeNotice(
+        icon: Icons.check_rounded,
+        title: '$name подключён',
+        description: 'Теперь этот провайдер доступен OpenCode в песочнице.',
+        action: FilledButton(
+          onPressed: () => Navigator.of(context).maybePop(),
+          child: const Text('Готово'),
         ),
       );
     }
     if (state.phase == AuthUiPhase.error && state.methods.isEmpty) {
-      return Center(child: Text('Ошибка: ${state.error ?? '—'}'));
+      return ForgeNotice(
+        icon: Icons.error_outline,
+        title: 'Не удалось подключить $name',
+        description: 'Повторите загрузку способов входа.',
+        error: true,
+        action: OutlinedButton(
+          onPressed: () => ctrl.loadMethods(providerID),
+          child: const Text('Повторить'),
+        ),
+      );
     }
-
+    final waiting =
+        state.phase == AuthUiPhase.waitingBrowser ||
+        state.phase == AuthUiPhase.waitingCode;
     return ListView(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
       children: [
-        if (state.error != null) ...[
-          Text(
-            state.error!,
-            style: TextStyle(color: Theme.of(context).colorScheme.error),
+        const Align(
+          alignment: Alignment.centerLeft,
+          child: ForgeBadge(Icons.key_outlined),
+        ),
+        const SizedBox(height: 16),
+        Text(name, style: Theme.of(context).textTheme.headlineMedium),
+        if (state.phase == AuthUiPhase.finishing ||
+            state.phase == AuthUiPhase.methodsLoading) ...[
+          const SizedBox(height: 20),
+          const LinearProgressIndicator(
+            semanticsLabel: 'Подключаем провайдера',
           ),
-          const SizedBox(height: 8),
-        ],
-        ..._methodCards(context),
-        if (state.phase == AuthUiPhase.waitingBrowser ||
-            state.phase == AuthUiPhase.waitingCode ||
-            state.phase == AuthUiPhase.finishing) ...[
-          const SizedBox(height: 16),
+        ] else if (waiting) ...[
+          const ForgeSectionTitle('Подтверждение доступа'),
           _oauthCard(context),
+          TextButton(
+            onPressed: () => ctrl.loadMethods(providerID),
+            child: const Text('Выбрать другой способ'),
+          ),
+        ] else ...[
+          const ForgeSectionTitle('Способы входа'),
+          if (state.error != null) ...[
+            const Text(
+              'Не удалось выполнить вход. Выберите способ и повторите попытку.',
+            ),
+            const SizedBox(height: 12),
+          ],
+          ..._methodCards(context),
         ],
       ],
     );
@@ -149,24 +199,28 @@ class _Body extends StatelessWidget {
         ListTile(
           leading: Icon(Icons.hourglass_empty),
           title: Text('Методы авторизации недоступны'),
-          subtitle: Text('Запустите песочницу на главном экране'),
+          subtitle: Text(
+            'OpenCode не предложил способов входа для этого провайдера.',
+          ),
         ),
       ];
     }
     return [
       for (final m in state.methods)
         Card(
+          margin: const EdgeInsets.only(bottom: 8),
+          clipBehavior: Clip.antiAlias,
           child: ListTile(
-            leading: Icon(m.type == 'oauth'
-                ? Icons.open_in_new
-                : Icons.vpn_key_outlined),
+            leading: Icon(
+              m.type == 'oauth' ? Icons.open_in_new : Icons.vpn_key_outlined,
+            ),
             title: Text(m.label.isEmpty ? m.type : m.label),
             subtitle: m.type == 'oauth'
                 ? const Text('Через браузер, токен остаётся в песочнице')
                 : const Text('Ручной ввод ключа'),
             onTap: () {
               if (m.type == 'oauth') {
-                unawaited(_startOauth(context, m));
+                unawaited(_startOauth(m));
               } else {
                 _showApiKeyDialog(context, m);
               }
@@ -176,10 +230,7 @@ class _Body extends StatelessWidget {
     ];
   }
 
-  Future<void> _startOauth(
-    BuildContext context,
-    AuthMethodChoice m,
-  ) async {
+  Future<void> _startOauth(AuthMethodChoice m) async {
     final inputs = <String, String>{};
     for (final p in m.prompts) {
       // Вопросы сервера (если появятся) заполняются пусто;
@@ -199,12 +250,8 @@ class _Body extends StatelessWidget {
           child: TextFormField(
             controller: keyCtrl,
             obscureText: true,
-            decoration: const InputDecoration(
-              labelText: 'Ключ',
-              border: OutlineInputBorder(),
-            ),
-            validator: (v) =>
-                (v == null || v.isEmpty) ? 'Введите ключ' : null,
+            decoration: const InputDecoration(labelText: 'Ключ'),
+            validator: (v) => (v == null || v.isEmpty) ? 'Введите ключ' : null,
           ),
         ),
         actions: [
@@ -273,8 +320,7 @@ class _Body extends StatelessWidget {
                 child: TextFormField(
                   controller: codeCtrl,
                   decoration: const InputDecoration(
-                    labelText: 'Код из redirect/callback',
-                    border: OutlineInputBorder(),
+                    labelText: 'Код подтверждения',
                   ),
                   validator: (v) =>
                       (v == null || v.isEmpty) ? 'Введите код' : null,
@@ -294,11 +340,11 @@ class _Body extends StatelessWidget {
             ],
             if (state.phase == AuthUiPhase.waitingBrowser) ...[
               const SizedBox(height: 12),
-              const LinearProgressIndicator(),
+              const Text('После подтверждения в браузере вернитесь сюда.'),
               const SizedBox(height: 8),
-              const Text(
-                'После подтверждения сервер автоматически получит токен; '
-                'если он покажет код — вставьте его в поле ниже.',
+              FilledButton.tonal(
+                onPressed: () => ctrl.finishInBrowser(providerID),
+                child: const Text('Завершить подключение'),
               ),
             ],
           ],
