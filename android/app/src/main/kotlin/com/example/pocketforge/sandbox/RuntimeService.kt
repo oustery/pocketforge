@@ -12,6 +12,7 @@ import android.os.Looper
 import android.util.Log
 import io.flutter.plugin.common.MethodChannel
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -358,7 +359,7 @@ class RuntimeService : Service() {
 
         // Прямой bootstrap: скачивание через Android-стек, распаковка в rootfs.
         setState(Phase.BOOTSTRAPPING_APK, "Установка пакетов через сеть Android (без proot)")
-        val nb = NativeBootstrap(ctx) { pkg, done, total ->
+        val nb = NativeBootstrap(this) { pkg, done, total ->
             val pct = if (total > 0) done * 100 / total else -1
             setState(
                 Phase.BOOTSTRAPPING_APK,

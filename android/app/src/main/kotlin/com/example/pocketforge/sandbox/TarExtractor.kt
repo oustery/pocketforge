@@ -230,7 +230,7 @@ object TarExtractor {
     fun extractApkSections(apk: File, destDir: File) {
         val issues = mutableListOf<String>()
         var fallbacks = 0
-        val onFallback = { fallbacks++ }
+        val onFallback: () -> Unit = { fallbacks++ }
         GZIPInputStream(FileInputStream(apk)).use { gz ->
             val header = ByteArray(512)
             var paxPath: String? = null
