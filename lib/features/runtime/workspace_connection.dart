@@ -88,8 +88,9 @@ class WorkspaceConnection extends ConsumerWidget {
             icon: Icons.memory_outlined,
             title: preparing ? 'Песочница готовится' : 'Нужна песочница',
             description: preparing
-                ? 'Следите за прогрессом в обзоре. После запуска инструмент станет доступен.'
-                : 'Запустите локальную среду из обзора, чтобы открыть этот раздел.',
+                ? 'Следите за прогрессом в обзоре. '
+                      'После запуска инструмент станет доступен.'
+                : 'Запустите песочницу в обзоре, чтобы открыть раздел.',
             action: FilledButton.tonal(
               onPressed: () => context.go('/'),
               child: const Text('К обзору'),

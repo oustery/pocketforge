@@ -177,8 +177,9 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
                         icon: Icons.terminal_rounded,
                         title: ready ? 'Терминал готов' : 'Нужна песочница',
                         description: ready
-                            ? 'Команды выполняются в Alpine Linux. Вывод и код завершения появятся здесь.'
-                            : 'Запустите песочницу в обзоре, чтобы выполнять команды.',
+                            ? 'Команды выполняются в Alpine Linux. '
+                                  'Вывод и код завершения появятся здесь.'
+                            : 'Запустите песочницу в обзоре.',
                         action: ready
                             ? OutlinedButton(
                                 onPressed: () => _input.text = 'ls workspace',

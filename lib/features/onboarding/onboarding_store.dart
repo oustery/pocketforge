@@ -14,7 +14,7 @@ class OnboardingStore {
   }
 
   /// Проверяет, было ли знакомство завершено или пропущено.
-  Future<bool> isComplete() async => (await _marker()).exists();
+  Future<bool> isComplete() async => (await _marker()).existsSync();
 
   /// Запоминает выбор пользователя на устройстве.
   Future<void> complete() async {

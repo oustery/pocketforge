@@ -145,8 +145,9 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       if (!mounted) return;
       setState(() {
         _checking = false;
-        if (_pending?.version != res.version || !res.isUpdate)
+        if (_pending?.version != res.version || !res.isUpdate) {
           _downloadedPath = null;
+        }
         _pending = res.isUpdate ? res : null;
         _status = res.isUpdate
             ? 'Доступно обновление: ${res.version}'
@@ -172,7 +173,7 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
     try {
       final svc = ref.read(updateServiceProvider);
       var path = _downloadedPath;
-      if (path == null || !await File(path).exists()) {
+      if (path == null || !File(path).existsSync()) {
         final dir = await getUpdatesDir();
         path = await svc.downloadApk(
           res.apkUrl,

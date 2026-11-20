@@ -297,7 +297,7 @@ class AuthController extends AsyncNotifier<AuthState> {
 
   Future<void> _finish(
     String providerID,
-    Future<Object?> Function() action,
+    Future<bool> Function() action,
   ) async {
     try {
       state = AsyncValue<AuthState>.data(
@@ -306,9 +306,9 @@ class AuthController extends AsyncNotifier<AuthState> {
           methods: state.value?.methods ?? const [],
         ),
       );
-      final success = await action();
-      if (success == false)
+      if (!await action()) {
         throw const FormatException('Провайдер не подтвердил вход');
+      }
       state = AsyncValue<AuthState>.data(
         AuthState(phase: AuthUiPhase.done, authenticatedProvider: providerID),
       );

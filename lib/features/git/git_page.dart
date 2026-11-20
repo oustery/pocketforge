@@ -258,6 +258,8 @@ class _GitBody extends StatelessWidget {
   Widget build(BuildContext context) {
     final o = state.overview;
     final diffs = state.diff;
+    final oid = o?.head.oid ?? '';
+    final shortOid = oid.length < 7 ? oid : oid.substring(0, 7);
     return ListView(
       physics: const AlwaysScrollableScrollPhysics(),
       padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
@@ -288,7 +290,8 @@ class _GitBody extends StatelessWidget {
             icon: Icons.account_tree_outlined,
             title: 'Репозиторий не открыт',
             description:
-                'Укажите каталог существующего репозитория или подготовьте клонирование через чат.',
+                'Укажите каталог репозитория или подготовьте '
+                'клонирование через чат.',
             action: FilledButton.tonal(
               onPressed: onClone,
               child: const Text('Клонировать через чат'),
@@ -308,7 +311,7 @@ class _GitBody extends StatelessWidget {
                       Expanded(
                         child: Text(
                           o.head.detached
-                              ? 'detached @ ${o.head.oid.substring(0, o.head.oid.length < 7 ? o.head.oid.length : 7)}'
+                              ? 'detached @ $shortOid'
                               : (o.head.branch.isEmpty ? '—' : o.head.branch),
                           style: Theme.of(context).textTheme.titleMedium,
                         ),

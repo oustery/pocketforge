@@ -137,8 +137,7 @@ class _MessageList extends StatelessWidget {
       return const ForgeNotice(
         icon: Icons.code_rounded,
         title: 'С какой задачи начнём?',
-        description:
-            'Опишите задачу и укажите файлы или каталог, с которыми нужно работать.',
+        description: 'Опишите задачу и укажите нужные файлы или каталог.',
       );
     }
     final items = <Widget>[
