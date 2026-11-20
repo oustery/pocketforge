@@ -206,19 +206,23 @@ class RuntimeService : Service() {
     // libc.musl→ld-musl) и sh работают. Явный запуск через загрузчик
     // (/lib/ld-musl-aarch64.so.1 <bin>) — другой execve-путь; если он даёт
     // код 0, serve и apk получают соответствующий префикс.
-    private var muslServePrefix: String = ""
     private var muslApkPrefix: String = ""
+
+    /// Полная стратегия запуска opencode для serve: пусто (прямой exec),
+    /// «/lib/ld-musl-aarch64.so.1 » (явный загрузчик) или env+загрузчик
+    /// («BUN_JSC_useJIT=0 /lib/ld-musl-aarch64.so.1 »). Выбирается пробами;
+    /// на устройстве с ROM-спецификой прямой exec тяжёлых бинарей умирает
+    /// молча, а другой путь/окружение жив.
+    private var serveStrategy: String = ""
+
+    /// native bootstrap уже отработал в ЭТОМ boot — ремонт не повторяет его.
+    private var apkBootstrapDoneThisBoot = false
     private var echoCode = -1
     private var shCode = -1
     private var apkDirectCode = -1
     private var apkMuslCode = -1
     private var ocDirectCode = -1
     private var ocMuslCode = -1
-
-    /// md5 opencode на устройстве (по пробе busybox md5sum при отказе exec) —
-    /// решающий факт: совпадает с эталоном → бинарь цел, проблема в либах/ROM;
-    /// не совпадает → файл на устройстве бит, ремонт переустановкой.
-    private var ocDeviceMd5: String? = null
 
     private fun bootSequence() {
         val t0 = System.currentTimeMillis()
@@ -276,10 +280,13 @@ class RuntimeService : Service() {
             } else {
                 SandboxLogger.i("apk-пакеты уже установлены (маркер есть)")
             }
+            apkBootstrapDoneThisBoot = true
 
-            // opencode не исполняется после установки пакетов — переустановка
-            // бинаря и библиотек (бит на ФС) и повторная матрица проб.
-            if (ocDirectCode != 0 && ocMuslCode != 0) {
+            // opencode не исполняется ни одной пробой — ремонт: переустановка
+            // бинаря и библиотек и повторная матрица проб. Если diagOpenCode
+            // нашла живую стратегию (например, без JIT) — serve заведётся
+            // без ремонта.
+            if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isEmpty()) {
                 repairAndRecheck(rootfs)
             }
             verifyToolchain(rootfs)
@@ -287,9 +294,9 @@ class RuntimeService : Service() {
             checkStop()
             setState(Phase.STARTING, "Запуск opencode serve")
             val logFile = File(SandboxPaths.logs(this), "serve.log")
-            manager.startServe(logFile, muslServePrefix)
+            manager.startServe(logFile, serveStrategy)
             healthy = false
-            SandboxLogger.i("proot запущен, порт=${manager.port}, префикс='${muslServePrefix.trim()}'")
+            SandboxLogger.i("proot запущен, порт=${manager.port}, стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}'")
 
             val deadline = System.currentTimeMillis() + 90_000
             while (System.currentTimeMillis() < deadline) {
@@ -357,49 +364,73 @@ class RuntimeService : Service() {
         ocDirectCode = probe("opencode-direct", "/usr/local/bin/opencode --version")
         ocMuslCode = probe("opencode-ldmusl", "/lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version")
 
-        muslServePrefix =
+        serveStrategy =
             if (ocDirectCode == 0) "" else if (ocMuslCode == 0) MUSL_LOADER + " " else ""
         muslApkPrefix =
             if (apkDirectCode == 0) "" else if (apkMuslCode == 0) MUSL_LOADER + " " else ""
         SandboxLogger.i(
-            "режим исполнения: serve-префикс='${muslServePrefix.trim().ifEmpty { "прямой" }}', " +
+            "режим исполнения: serve-стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}', " +
                 "apk-префикс='${muslApkPrefix.trim().ifEmpty { "прямой" }}'",
         )
         if (ocDirectCode != 0 && ocMuslCode != 0) {
             SandboxLogger.w(
-                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — будет ремонт",
+                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — диагностика",
             )
-            // Решающий факт — md5 бинаря НА УСТРОЙСТВЕ (эталон в манифесте):
-            // md5sum на ~219 МБ занимает 1–3 с, допустимо.
-            ocDeviceMd5 = null
-            val refMd5 = installer.opencodeBinaryMd5()
-            if (refMd5 != null) {
-                val out = probeOut("opencode-md5", "md5sum /usr/local/bin/opencode", 120_000)
-                val deviceMd5 = out?.trim()?.substringBefore(' ')?.lowercase()
-                ocDeviceMd5 = deviceMd5
-                val verdict = when {
-                    deviceMd5 == null -> "не получен"
-                    deviceMd5 == refMd5 -> "СОВПАДАЕТ с эталоном ($refMd5) — файл цел, причина в либах/ROM"
-                    else -> "НЕ СОВПАДАЕТ: на устройстве $deviceMd5, эталон $refMd5 — файл бит"
-                }
-                SandboxLogger.i("верификация opencode md5: $verdict")
-            }
+            diagOpenCode()
+        }
+        if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isNotEmpty()) {
+            SandboxLogger.i(
+                "живая стратегия serve найдена: '${serveStrategy.trim()}' — ремонт не требуется",
+            )
         }
     }
 
-    /// Проба с получением вывода (для сравнения с эталоном кодом).
-    private fun probeOut(name: String, cmd: String, timeoutMs: Long = 30_000): String? {
-        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
-        checkLog.writeText("")
-        val code = try {
-            manager.runOnce(cmd, checkLog, timeoutMs)
-        } catch (e: IOException) {
-            SandboxLogger.w("probe $name: ${e.message}")
-            return null
+    /// Диагностика отказа opencode: факты МАЛЫМИ чтениями (md5sum/ls на 219 МБ
+    /// на устройстве умирают молча — большие операции под proot ненадёжны),
+    /// verbose-проба proot (печатает статус/сигнал смерти гостя) и матрица
+    /// вариантов запуска: если какой-то жив — он становится serve-стратегией.
+    private fun diagOpenCode() {
+        // Размеры на устройстве: opencode ~218963048 байт; libstdc++ — из пакета.
+        probe(
+            "diag-ls",
+            "ls -l /usr/local/bin/opencode /usr/local/bin/.pf-opencode-version /usr/lib/libstdc++.so.6*",
+            20_000,
+        )
+        // Память и диск: apk add/update и md5sum умирали молча — пусть будет факт.
+        probe("diag-free-df", "free -m | head -3; df -h /root /tmp | head -4", 20_000)
+        // md5 МАЛОЙ библиотеки (2.8 МБ — живой объём): целость установленной либы.
+        probe("diag-md5-libstdc", "md5sum /usr/lib/libstdc++.so.6.0.34", 60_000)
+        // Внутренняя причина смерти гостя: proot печатает «exited with status N» /
+        // «terminated with signal N» — различает exit(255) и сигнал (SIGBUS/SIGKILL).
+        probeVerbose("opencode-verbose", "/usr/local/bin/opencode --version", 60_000)
+        probeVerbose(
+            "opencode-verbose-ldmusl",
+            "/lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version",
+            60_000,
+        )
+        // Варианты окружения/загрузчика. BUN_JSC_useJIT=0 отключает JIT —
+        // на ROM с запретом RWX-маппинга (execmem) это единственный путь.
+        val variants = listOf(
+            "opencode-nojit" to
+                "BUN_JSC_useJIT=0 BUN_JSC_useFTLJIT=0 /usr/local/bin/opencode --version",
+            "opencode-nojit-ldmusl" to
+                "BUN_JSC_useJIT=0 BUN_JSC_useFTLJIT=0 /lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version",
+        )
+        for ((name, cmd) in variants) {
+            if (probe(name, cmd, 60_000) == 0) {
+                serveStrategy = cmd.substringBefore("/usr/local/bin/opencode").trim() + " "
+                return
+            }
         }
-        val out = HealthCheck.tail(checkLog, 400).trim()
-        SandboxLogger.i("probe $name: код $code, вывод: ${out.take(160)}")
-        return if (code == 0) out else null
+        // Ни одна стратегия не жива — md5 бинаря на устройстве не получить
+        // (md5sum на большом файле умирает молча); целость гарантируется
+        // md5-верификацией ПОСЛЕ записи на Android-стороне.
+        val refMd5 = installer.opencodeBinaryMd5()
+        if (refMd5 != null) {
+            SandboxLogger.i(
+                "opencode md5-эталон: $refMd5 (целость файла гарантируется верификацией после записи)",
+            )
+        }
     }
 
     /// Проба исполнения команды внутри proot с логом результата.
@@ -419,16 +450,34 @@ class RuntimeService : Service() {
         return code
     }
 
-    /// Ремонт: opencode не исполняется после установки пакетов — переустановка
-    /// бинаря (force, с md5-верификацией записи) и всех apk-пакетов, затем
-    /// повторная матрица проб. Если md5 на устройстве не совпал с эталоном,
-    /// tar.gz-кеш инвалидируется (перекачка).
+    /// Проба с verbose-печатью proot: различает «exited with status N» и
+    /// «terminated with signal N» — без этого молчаливая смерть гостя слепа.
+    private fun probeVerbose(name: String, cmd: String, timeoutMs: Long = 60_000): Int {
+        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
+        checkLog.writeText("")
+        val code = try {
+            manager.runOnce(cmd, checkLog, timeoutMs, verbose = true)
+        } catch (e: IOException) {
+            SandboxLogger.w("probe $name: ${e.message}")
+            return -1
+        }
+        // VERBOSE-строки proot «vpid 1: exited with status N» — самое ценное.
+        val out = HealthCheck.tail(checkLog, 400).trim().replace("\n", " | ")
+        SandboxLogger.i(
+            "probe $name: код $code, вывод: ${out.take(400)}",
+        )
+        return code
+    }
+
+    /// md5 opencode на устройстве больше не снимается пробой (md5sum на
+    /// 219 МБ умирает молча под proot на этом ROM); целость гарантируется
+    /// верификацией ПОСЛЕ записи на Android-стороне (RootfsInstaller).
     private fun repairAndRecheck(rootfs: File) {
         checkStop()
         setState(Phase.BOOTSTRAPPING_APK, "Ремонт: переустановка opencode и библиотек")
         SandboxLogger.w(
-            "repair: opencode не исполняется ($ocDirectCode/$ocMuslCode), md5=${ocDeviceMd5 ?: "?"} — " +
-                "переустанавливаю бинарь и apk-пакеты",
+            "repair: opencode не исполняется ни одной пробой ($ocDirectCode/$ocMuslCode) — " +
+                "переустанавливаю бинарь" + if (apkBootstrapDoneThisBoot) "" else " и apk-пакеты",
         )
         val refMd5 = installer.opencodeBinaryMd5()
         // Битые файлы: бинарь, его маркер, библиотеки libstdc++ (симлинк+файл).
@@ -438,15 +487,22 @@ class RuntimeService : Service() {
             if (f.name.startsWith("libstdc++.so")) f.delete()
         }
         installer.ensureOpencode(rootfs, force = true)
-        NativeBootstrap(this).bootstrapPackages(rootfs, installer.apkPackages)
+        if (!apkBootstrapDoneThisBoot) {
+            // Пакеты уже ставились в этом boot — повтор только тратит время.
+            NativeBootstrap(this).bootstrapPackages(rootfs, installer.apkPackages)
+        }
         detectExecMode(rootfs)
-        if (ocDirectCode != 0 && ocMuslCode != 0) {
+        if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isEmpty()) {
+            verifyToolchain(rootfs)
             throw java.io.IOException(
                 "opencode не исполняется и после ремонта (direct=$ocDirectCode, ldmusl=$ocMuslCode, " +
-                    "md5=${ocDeviceMd5 ?: "?"} vs эталон ${refMd5 ?: "?"}) — пришлите экспорт логов",
+                    "стратегии: прямой/ldmusl/nojit; md5-эталон ${refMd5 ?: "?"}) — пришлите экспорт логов",
             )
         }
-        SandboxLogger.i("repair: opencode исполняется после переустановки (direct=$ocDirectCode)")
+        SandboxLogger.i(
+            "repair: opencode исполняется после переустановки " +
+                "(direct=$ocDirectCode, ldmusl=$ocMuslCode, стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}')",
+        )
     }
 
     /// Верификация тулчейна: динамические бинари из пакетов должны стартовать —

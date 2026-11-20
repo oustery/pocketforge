@@ -23,11 +23,12 @@ class ProotManager(private val ctx: Context) {
         if (p.isAlive) null else runCatching { p.exitValue() }.getOrNull()
     }
 
-    /// [muslPrefix] — префикс команды: если на устройстве прямой exec
-    /// динамических бинарей под proot молча умирает (код 255, вывод пуст —
-    /// см. boot.log preflight), а явный запуск через ld-musl работает,
-    /// передаётся «/lib/ld-musl-aarch64.so.1 » — другой execve-путь.
-    fun startServe(logFile: File, muslPrefix: String = "") {
+    /// [serveStrategy] — полный префикс запуска opencode: пустой (прямой
+    /// exec), «/lib/ld-musl-aarch64.so.1 » (явный загрузчик) или с env-присваиваниями
+    /// («BUN_JSC_useJIT=0 /lib/ld-musl-aarch64.so.1 ») — выбирается пробами
+    /// detectExecMode; на ROM с нестандартным ядром прямой exec динамических
+    /// бинарей умирает молча, а другой путь/окружение работает.
+    fun startServe(logFile: File, serveStrategy: String = "") {
         val rootfs = SandboxPaths.rootfs(ctx)
         val workspace = SandboxPaths.workspace(ctx)
         workspace.mkdirs()
@@ -48,7 +49,8 @@ class ProotManager(private val ctx: Context) {
             "/bin/sh", "-c",
             // pf-serve-boot в логе ДОКАЗЫВАЕТ, что sh внутри proot выполнился;
             // 2>&1 гарантирует, что ошибки ld-musl/opencode попадут в serve.log.
-            "echo pf-serve-boot && cd /root && exec ${muslPrefix}/usr/local/bin/opencode " +
+            // exec-строка валидна и с env-присваиваниями в стратегии (POSIX sh).
+            "echo pf-serve-boot && cd /root && exec ${serveStrategy}/usr/local/bin/opencode " +
                 "serve --port $port --print-logs --log-level INFO 2>&1",
         )
 
@@ -77,18 +79,24 @@ class ProotManager(private val ctx: Context) {
     /// Разовая команда внутри песочницы (bootstrap apk-пакетов, preflight).
     /// [timeoutMs] обязателен: без него зависший apk (мертвая сеть) вечно
     /// держал бы boot-фазу — watchdog на не-READY не работает.
-    fun runOnce(shellCommand: String, logFile: File, timeoutMs: Long = 600_000L): Int {
+    /// [verbose] включает PROOT_VERBOSE-печать proot («exited with status N» /
+    /// «terminated with signal N») — без неё молчаливая смерть гостя
+    /// неотличима от смерти без причины (реальный случай: exit 255 пусто).
+    fun runOnce(shellCommand: String, logFile: File, timeoutMs: Long = 600_000L, verbose: Boolean = false): Int {
         val rootfs = SandboxPaths.rootfs(ctx)
         val proot = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
-        val args = mutableListOf(
-            proot.absolutePath,
-            "-r", rootfs.absolutePath,
-            "-b", "/proc",
-            "-b", "/dev",
-            "-b", "${SandboxPaths.workspace(ctx).absolutePath}:/root/workspace",
-            "-0",
-            "-w", "/root",
-            "/bin/sh", "-c", shellCommand,
+        val args = mutableListOf(proot.absolutePath)
+        if (verbose) args.addAll(listOf("-v", "2"))
+        args.addAll(
+            listOf(
+                "-r", rootfs.absolutePath,
+                "-b", "/proc",
+                "-b", "/dev",
+                "-b", "${SandboxPaths.workspace(ctx).absolutePath}:/root/workspace",
+                "-0",
+                "-w", "/root",
+                "/bin/sh", "-c", shellCommand,
+            ),
         )
         logFile.parentFile?.mkdirs()
         val pb = ProcessBuilder(args).apply {

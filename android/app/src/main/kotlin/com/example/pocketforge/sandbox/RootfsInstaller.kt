@@ -103,7 +103,14 @@ class RootfsInstaller(private val ctx: Context) {
         val marker = File(rootfs, "usr/local/bin/.pf-opencode-version")
         val binary = File(rootfs, oc.getString("installPath").removePrefix("/"))
         if (!force && marker.exists() && marker.readText().trim() == oc.getString("version") && binary.exists()) {
-            return binary
+            // Верифицируем и кешированный по маркеру файл: обрыв записи в
+            // прошлом boot иначе переживает все проверки (реальный случай 0.3.8:
+            // битый бинарь жил под маркером и ронял ld-musl «symbol not found»).
+            val wantMd5 = oc.getJSONObject("binary").optString("md5", "")
+            if (wantMd5.isEmpty() || md5(binary).equals(wantMd5, ignoreCase = true)) {
+                return binary
+            }
+            SandboxLogger.w("opencode из прошлого boot бит (md5 не совпал) — переустановка")
         }
         val tar = ArtifactsDownloader.download(
             url = oc.getString("url"),
