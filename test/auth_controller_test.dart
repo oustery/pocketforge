@@ -50,7 +50,7 @@ class ScriptedAdapter implements HttpClientAdapter {
         'instructions': 'Откройте ссылку, подтвердите и вставьте код',
       };
     } else if (path == '/provider/anthropic/oauth/callback' ||
-        path == '/auth/anthropic') {
+        path.startsWith('/auth/')) {
       body = true;
     }
     return ResponseBody.fromString(
@@ -106,34 +106,36 @@ void main() {
     expect(s.instructions, contains('код'));
   });
 
-  test('finishWithCode: callback → done; экспорт токена через authSet',
-      () async {
-    final adapter = ScriptedAdapter();
-    final c = container(adapter);
-    addTearDown(c.dispose);
-    final ctrl = c.read(authControllerProvider.notifier);
-    await ctrl.loadMethods('anthropic');
-    await ctrl.startOauth('anthropic', methodIndex: 0);
+  test(
+    'finishWithCode: callback → done; экспорт токена через authSet',
+    () async {
+      final adapter = ScriptedAdapter();
+      final c = container(adapter);
+      addTearDown(c.dispose);
+      final ctrl = c.read(authControllerProvider.notifier);
+      await ctrl.loadMethods('anthropic');
+      await ctrl.startOauth('anthropic', methodIndex: 0);
 
-    await ctrl.finishWithCode('anthropic', 'the_code');
-    final s = c.read(authControllerProvider).value!;
-    expect(s.phase, AuthUiPhase.done);
-    expect(s.authenticatedProvider, 'anthropic');
+      await ctrl.finishWithCode('anthropic', 'the_code');
+      final s = c.read(authControllerProvider).value!;
+      expect(s.phase, AuthUiPhase.done);
+      expect(s.authenticatedProvider, 'anthropic');
 
-    final put = adapter.calls
-        .where((x) => x.method == 'PUT' && x.path == '/auth/anthropic')
-        .toList();
-    expect(put, isEmpty); // server-side oauth: PUT /auth не используется
+      final put = adapter.calls
+          .where((x) => x.method == 'PUT' && x.path == '/auth/anthropic')
+          .toList();
+      expect(put, isEmpty); // server-side oauth: PUT /auth не используется
 
-    final callback = adapter.calls
-        .where(
-          (x) =>
-              x.method == 'POST' &&
-              x.path == '/provider/anthropic/oauth/callback',
-        )
-        .toList();
-    expect(callback, hasLength(1));
-  });
+      final callback = adapter.calls
+          .where(
+            (x) =>
+                x.method == 'POST' &&
+                x.path == '/provider/anthropic/oauth/callback',
+          )
+          .toList();
+      expect(callback, hasLength(1));
+    },
+  );
 
   test('finishWithDeviceFlowToken: PUT /auth/{id} c oauth-телом', () async {
     final adapter = ScriptedAdapter();

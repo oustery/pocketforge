@@ -1,6 +1,3 @@
-import 'dart:io';
-
-import 'package:flutter/foundation.dart' show debugPrintSynchronously;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,23 +20,6 @@ class _MemoryOnboardingStore extends OnboardingStore {
 }
 
 void main() {
-  if (Platform.environment['GITHUB_ACTIONS'] == 'true') {
-    final originalReporter = reportTestException;
-    reportTestException = (details, description) {
-      final message = '$description\n${details.exceptionAsString()}'
-          .split('\n')
-          .take(14)
-          .join('\n')
-          .replaceAll('%', '%25')
-          .replaceAll('\r', '%0D')
-          .replaceAll('\n', '%0A');
-      debugPrintSynchronously(
-        '\n::error title=Workspace widget test::$message',
-      );
-      originalReporter(details, description);
-    };
-  }
-
   const sandbox = MethodChannel('pocketforge/sandbox');
   final calls = <String>[];
   late String phase;
@@ -140,12 +120,12 @@ void main() {
     await openApp(tester, _MemoryOnboardingStore(completed: true));
     expect(find.text('Сбросить песочницу'), findsNothing);
     final diagnostics = find.text('Диагностика песочницы');
-    await tester.ensureVisible(diagnostics);
+    await tester.scrollUntilVisible(diagnostics, 150);
     await tester.tap(diagnostics);
     await tester.pumpAndSettle();
 
     final reset = find.text('Сбросить песочницу');
-    await tester.ensureVisible(reset);
+    await tester.scrollUntilVisible(reset, 150);
     await tester.tap(reset);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Отмена'));
@@ -172,8 +152,10 @@ void main() {
     await tester.tap(terminal);
     await tester.pumpAndSettle();
     await tester.enterText(find.byType(TextField), 'ls workspace');
+    await tester.pump();
     await tester.tap(find.byTooltip('Выполнить команду'));
     await tester.pumpAndSettle();
+    expect(calls.where((method) => method == 'exec'), hasLength(1));
     final output = find.byWidgetPredicate(
       (widget) =>
           widget is SelectableText &&
@@ -187,7 +169,7 @@ void main() {
     await tester.pumpAndSettle();
     await tester.tap(terminal);
     await tester.pumpAndSettle();
-    expect(output, findsOneWidget);
+    expect(output, findsOneWidget, reason: 'Вывод сохранён при смене вкладки');
     expect(calls.where((method) => method == 'exec'), hasLength(1));
     await tester.pumpWidget(const SizedBox.shrink());
   });
