@@ -7,6 +7,7 @@ import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
 import 'package:pocketforge/core/platform/sandbox_channel.dart';
+import 'package:pocketforge/features/runtime/runtime_controller.dart';
 import 'package:pocketforge/features/update/update_service.dart';
 
 /// Экспорт логов песочницы (boot.log, apk.log, serve.log + meta) в zip
@@ -33,11 +34,14 @@ class _LogsExportRowState extends ConsumerState<LogsExportRow> {
     try {
       final path = await ref.read(sandboxChannelProvider).exportLogs();
       if (!mounted) return;
+      String status = 'Экспорт недоступен на этом устройстве';
+      if (path != null) {
+        final fileName = path.split('/').last;
+        status = 'Логи собраны, откроется окно отправки: $fileName';
+      }
       setState(() {
         _busy = false;
-        _status = path == null
-            ? 'Экспорт недоступен на этом устройстве'
-            : 'Логи собраны, откроется окно отправки: ${Uri.file(path).pathSegments.last}';
+        _status = status;
       });
     } on Exception catch (e) {
       if (mounted) {
