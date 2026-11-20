@@ -1,6 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/design/forge_theme.dart';
 import 'package:pocketforge/features/auth/auth_page.dart';
 import 'package:pocketforge/features/chat/chat_route.dart';

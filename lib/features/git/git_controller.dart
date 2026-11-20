@@ -110,7 +110,6 @@ class GitController extends AsyncNotifier<GitState> {
 
   /// Меняет каталог репозитория.
   Future<void> setWorkDir(String dir) async {
-    final cur = state.value ?? const GitState(workDir: '/root/project');
     state = AsyncValue<GitState>.data(GitState(workDir: dir, busy: true));
     final fresh = await _load(dir);
     state = AsyncValue<GitState>.data(fresh.copyWith(busy: false));

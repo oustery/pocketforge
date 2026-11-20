@@ -1,7 +1,7 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/auth/auth_controller.dart';
 import 'package:url_launcher/url_launcher.dart';
@@ -222,7 +222,7 @@ class _Body extends StatelessWidget {
               if (m.type == 'oauth') {
                 unawaited(_startOauth(m));
               } else {
-                _showApiKeyDialog(context, m);
+                unawaited(_showApiKeyDialog(context, m));
               }
             },
           ),
@@ -240,8 +240,8 @@ class _Body extends StatelessWidget {
     await ctrl.startOauth(providerID, methodIndex: m.index, inputs: inputs);
   }
 
-  void _showApiKeyDialog(BuildContext context, AuthMethodChoice m) {
-    showDialog<void>(
+  Future<void> _showApiKeyDialog(BuildContext context, AuthMethodChoice m) {
+    return showDialog<void>(
       context: context,
       builder: (ctx) => AlertDialog(
         title: Text(m.label.isEmpty ? 'API-ключ' : m.label),

@@ -1,8 +1,8 @@
 import 'package:flutter/foundation.dart'
     show LicenseEntryWithLineBreaks, LicenseRegistry;
-import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show rootBundle;
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/app.dart';
 import 'package:pocketforge/features/auth/auth_controller.dart';
 import 'package:pocketforge/features/auth/token_store.dart';

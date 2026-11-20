@@ -1,5 +1,5 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
 
@@ -149,7 +149,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
 /// через системный share-шит — для разбора ошибок запуска на устройстве.
 class _LogsExportRow extends ConsumerStatefulWidget {
   /// Создаёт строку.
-  const _LogsExportRow({super.key});
+  const _LogsExportRow();
 
   @override
   ConsumerState<_LogsExportRow> createState() => __LogsExportRowState();

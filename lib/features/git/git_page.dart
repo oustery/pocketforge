@@ -1,8 +1,8 @@
 import 'dart:async';
 
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/git/git_controller.dart';
 import 'package:pocketforge/features/git/git_parsers.dart';
@@ -88,7 +88,7 @@ class GitPage extends ConsumerWidget {
                 ctrl: ctrl,
                 onOpen: () => _workDirDialog(context, ctrl, s),
                 onClone: () => _cloneDialog(context, ctrl),
-                onBranches: () => _branchesSheet(context, ctrl, s),
+                onBranches: () => unawaited(_branchesSheet(context, ctrl, s)),
               ),
             ),
           ),
@@ -190,14 +190,14 @@ class GitPage extends ConsumerWidget {
     if (result != null && context.mounted) onAccepted(result);
   }
 
-  void _branchesSheet(
+  Future<void> _branchesSheet(
     BuildContext context,
     GitController ctrl,
     GitState? current,
   ) {
     final overview = current?.overview;
     final branches = overview?.branches ?? const <GitBranch>[];
-    showModalBottomSheet<void>(
+    return showModalBottomSheet<void>(
       context: context,
       builder: (ctx) => SafeArea(
         child: ListView(

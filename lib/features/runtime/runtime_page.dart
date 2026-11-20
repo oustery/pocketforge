@@ -1,6 +1,6 @@
-import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:material_ui/material_ui.dart';
 import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/core/platform/sandbox_channel.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
@@ -192,7 +192,7 @@ class _RuntimeCardState extends ConsumerState<_RuntimeCard> {
             if (state.preparing) ...[
               const SizedBox(height: 16),
               LinearProgressIndicator(
-                value: state.progress?.clamp(0.0, 1.0).toDouble(),
+                value: state.progress?.clamp(0.0, 1.0),
                 semanticsLabel: 'Подготовка песочницы',
               ),
             ],

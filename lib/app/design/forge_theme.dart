@@ -1,6 +1,4 @@
-import 'dart:ui' show FontVariation;
-
-import 'package:flutter/material.dart';
+import 'package:material_ui/material_ui.dart';
 
 /// Общая визуальная система рабочего пространства.
 ThemeData forgeTheme(Brightness brightness) {
