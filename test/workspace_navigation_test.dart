@@ -1,6 +1,3 @@
-import 'dart:io';
-
-import 'package:flutter/foundation.dart' show debugPrintSynchronously;
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -23,25 +20,6 @@ class _MemoryOnboardingStore extends OnboardingStore {
 }
 
 void main() {
-  if (Platform.environment['GITHUB_ACTIONS'] == 'true') {
-    final originalReporter = reportTestException;
-    reportTestException = (details, description) {
-      final message =
-          '$description\n${details.exceptionAsString()}\n'
-                  '${details.stack}'
-              .split('\n')
-              .take(14)
-              .join('\n')
-              .replaceAll('%', '%25')
-              .replaceAll('\r', '%0D')
-              .replaceAll('\n', '%0A');
-      debugPrintSynchronously(
-        '\n::error title=Workspace widget test::$message',
-      );
-      originalReporter(details, description);
-    };
-  }
-
   const sandbox = MethodChannel('pocketforge/sandbox');
   final calls = <String>[];
   late String phase;
@@ -139,16 +117,20 @@ void main() {
   testWidgets('сброс вынесен в диагностику и требует подтверждения', (
     tester,
   ) async {
+    await tester.binding.setSurfaceSize(const Size(800, 950));
+    addTearDown(() => tester.binding.setSurfaceSize(null));
     await openApp(tester, _MemoryOnboardingStore(completed: true));
     expect(find.text('Сбросить песочницу'), findsNothing);
-    final diagnostics = find.text('Диагностика песочницы');
+    final diagnostics = find.widgetWithText(ListTile, 'Диагностика песочницы');
     await tester.scrollUntilVisible(
       diagnostics,
       150,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.pumpAndSettle();
     await tester.tap(diagnostics);
     await tester.pumpAndSettle();
+    expect(find.text('Диагностика'), findsOneWidget);
 
     final reset = find.text('Сбросить песочницу');
     await tester.scrollUntilVisible(
@@ -156,6 +138,7 @@ void main() {
       150,
       scrollable: find.byType(Scrollable).first,
     );
+    await tester.pumpAndSettle();
     await tester.tap(reset);
     await tester.pumpAndSettle();
     await tester.tap(find.text('Отмена'));
