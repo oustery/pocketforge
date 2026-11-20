@@ -1,5 +1,5 @@
 {
-  "version": "0.3.6",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.6-arm64.apk",
-  "notes": "Bootstrap пакетов без proot (прямой путь через Android-сеть) при отказе apk в песочнице; boot.log с каждым шагом; экспорт логов в настройках; таймауты и стоп-фиксы"
+  "version": "0.3.7",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.7-arm64.apk",
+  "notes": "Автоопределение режима исполнения: если opencode не запускается напрямую под proot, serve и apk запускаются через явный ld-musl загрузчик; маркер pf-serve-boot и полная матрица проб в boot.log"
 }

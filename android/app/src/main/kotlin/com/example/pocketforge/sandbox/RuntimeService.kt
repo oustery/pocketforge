@@ -27,6 +27,10 @@ class RuntimeService : Service() {
         private const val CHANNEL_ID = "pocketforge_sandbox"
         private const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.example.pocketforge.sandbox.START"
+
+        /// Явный динамический загрузчик musl: обход молчаливого отказа
+        /// execve динамических бинарей под proot (см. detectExecMode).
+        const val MUSL_LOADER = "/lib/ld-musl-aarch64.so.1"
         const val ACTION_STOP = "com.example.pocketforge.sandbox.STOP"
         const val ACTION_RESET = "com.example.pocketforge.sandbox.RESET"
 
@@ -195,11 +199,27 @@ class RuntimeService : Service() {
         return START_STICKY
     }
 
+    // Режим исполнения внутри proot (определяется пробами на каждый boot):
+    // на устройстве пользователя прямой exec динамических бинарей (apk,
+    // opencode — у обоих NEEDED помимо libc) умирает молча с 255 при пустом
+    // выводе, тогда как busybox (единственный NEEDED — интерпретатор-симлинк
+    // libc.musl→ld-musl) и sh работают. Явный запуск через загрузчик
+    // (/lib/ld-musl-aarch64.so.1 <bin>) — другой execve-путь; если он даёт
+    // код 0, serve и apk получают соответствующий префикс.
+    private var muslServePrefix: String = ""
+    private var muslApkPrefix: String = ""
+    private var echoCode = -1
+    private var shCode = -1
+    private var apkDirectCode = -1
+    private var apkMuslCode = -1
+    private var ocDirectCode = -1
+    private var ocMuslCode = -1
+
     private fun bootSequence() {
         val t0 = System.currentTimeMillis()
         try {
             lastErrorSet(null)
-            SandboxLogger.i("=== boot: старт (v0.3.6) ===")
+            SandboxLogger.i("=== boot: старт (v0.3.7) ===")
 
             checkStop()
             setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs")
@@ -211,7 +231,12 @@ class RuntimeService : Service() {
                 },
                 { stopRequested },
             )
-            SandboxLogger.i("rootfs готов (${installer.rootfsVersion}, bin/sh=${File(rootfs, "bin/sh").exists()})")
+            val sh = File(rootfs, "bin/sh")
+            val shOk = java.nio.file.Files.isSymbolicLink(sh.toPath()) || sh.exists()
+            SandboxLogger.i(
+                "rootfs готов (${installer.rootfsVersion}, bin/sh=${shOk}, " +
+                    "busybox=${File(rootfs, "bin/busybox").exists()})",
+            )
 
             checkStop()
             installer.writeResolvConf(rootfs)
@@ -235,6 +260,9 @@ class RuntimeService : Service() {
             )
             SandboxLogger.i("opencode ${installer.opencodeVersion} готов")
 
+            checkStop()
+            detectExecMode(rootfs)
+
             val apkMarker = File(rootfs, ".pf-apk-bootstrap")
             if (!apkMarker.exists()) {
                 bootstrapApkPackages(rootfs)
@@ -247,18 +275,22 @@ class RuntimeService : Service() {
             checkStop()
             setState(Phase.STARTING, "Запуск opencode serve")
             val logFile = File(SandboxPaths.logs(this), "serve.log")
-            manager.startServe(logFile)
+            manager.startServe(logFile, muslServePrefix)
             healthy = false
-            SandboxLogger.i("proot запущен, порт=${manager.port}")
+            SandboxLogger.i("proot запущен, порт=${manager.port}, префикс='${muslServePrefix.trim()}'")
 
             val deadline = System.currentTimeMillis() + 90_000
             while (System.currentTimeMillis() < deadline) {
                 checkStop()
                 if (!manager.isAlive()) {
-                    throw java.io.IOException(
-                        "proot завершился до успешного healthcheck; " +
-                            "serve.log: ${HealthCheck.tail(logFile, 400).trim().ifEmpty { "(пусто)" }}",
-                    )
+                    val served = logFile.let { HealthCheck.tail(it, 400).trim() }
+                    val detail = when {
+                        served.isEmpty() -> "(пусто — sh внутри proot не стартовал)"
+                        served.contains("pf-serve-boot") && served.length < 60 ->
+                            "(sh выполнился, но opencode не напечатал ничего — отказ exec)"
+                        else -> served
+                    }
+                    throw java.io.IOException("proot завершился до успешного healthcheck; serve.log: $detail")
                 }
                 val code = try {
                     HealthCheck.check(manager.port, manager.password)
@@ -296,48 +328,74 @@ class RuntimeService : Service() {
         if (stopRequested) throw java.io.IOException("Песочница остановлена")
     }
 
-    /// Установка apk-пакетов: preflight-серия (echo/sh/apk --version) с
-    /// логированием, затем apk внутри proot; при отказе apk-процесса —
-    /// прямой bootstrap через Android-сеть (без исполнения под proot).
-    private fun bootstrapApkPackages(rootfs: File) {
+    /// Матрица проб исполнения внутри proot — на каждый boot (пробы дешёвые,
+    /// ~0.5 с суммарно; сеть/Wi-Fi между запусками не влияет). Результаты
+    /// пишутся в boot.log целиком — следующий экспорт логов будет содержать
+    /// полный расклад даже если serve снова умрёт.
+    private fun detectExecMode(rootfs: File) {
         val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
-        val results = mutableListOf<String>()
 
-        fun probe(name: String, cmd: String, timeoutMs: Long): Int {
+        fun probe(name: String, cmd: String): Int {
             checkLog.writeText("")
             val code = try {
-                manager.runOnce(cmd, checkLog, timeoutMs)
+                manager.runOnce(cmd, checkLog, 30_000)
             } catch (e: IOException) {
-                results += "$name: ${e.message}"
-                SandboxLogger.w("preflight $name: ${e.message}")
+                SandboxLogger.w("probe $name: ${e.message}")
                 return -1
             }
             val out = HealthCheck.tail(checkLog, 200).trim().replace("\n", " | ")
-            results += "$name: код $code${if (out.isEmpty()) "" else ", вывод: $out"}"
-            SandboxLogger.i("preflight $name: код $code${if (out.isEmpty()) "" else ", вывод: $out"}")
+            SandboxLogger.i(
+                "probe $name: код $code${if (out.isEmpty()) if (code == 0) "" else " (молчаливый отказ)" else ", вывод: $out"}",
+            )
             return code
         }
 
-        setState(Phase.BOOTSTRAPPING_APK, "Проверка песочницы (preflight)")
-        val echoCode = probe("echo", "/bin/echo pf-proot-ok", 30_000)
-        if (echoCode != 0) {
-            // sh внутри proot не исполняется — и serve не заведётся; быстрый
-            // fail с фактами всех микротестов.
-            throw java.io.IOException(
-                "proot не смог выполнить /bin/echo (код $echoCode); пробы: ${results.joinToString("; ")}",
+        setState(Phase.STARTING, "Проверка режима исполнения песочницы")
+        echoCode = probe("echo", "/bin/echo pf-proot-ok")
+        shCode = probe("sh", "/bin/sh -c 'echo pf-sh-ok'")
+        apkDirectCode = probe("apk-direct", "/sbin/apk --version")
+        apkMuslCode = probe("apk-ldmusl", "/lib/ld-musl-aarch64.so.1 /sbin/apk --version")
+        ocDirectCode = probe("opencode-direct", "/usr/local/bin/opencode --version")
+        ocMuslCode = probe("opencode-ldmusl", "/lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version")
+
+        muslServePrefix =
+            if (ocDirectCode == 0) "" else if (ocMuslCode == 0) MUSL_LOADER + " " else ""
+        muslApkPrefix =
+            if (apkDirectCode == 0) "" else if (apkMuslCode == 0) MUSL_LOADER + " " else ""
+        SandboxLogger.i(
+            "режим исполнения: serve-префикс='${muslServePrefix.trim().ifEmpty { "прямой" }}', " +
+                "apk-префикс='${muslApkPrefix.trim().ifEmpty { "прямой" }}'",
+        )
+        if (muslServePrefix.isEmpty() && ocDirectCode != 0) {
+            SandboxLogger.w(
+                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — serve, вероятно, упадёт; нужен экспорт логов",
             )
         }
-        val shCode = probe("sh", "/bin/sh -c 'echo pf-sh-ok'", 30_000)
-        val apkVersionCode = probe("apk --version", "apk --version", 30_000)
+    }
 
-        if (shCode == 0 && apkVersionCode == 0) {
+    /// Установка apk-пакетов: apk внутри proot (с префиксом по пробам) либо
+    /// прямой bootstrap через Android-сеть (без исполнения под proot).
+    private fun bootstrapApkPackages(rootfs: File) {
+        if (echoCode != 0) {
+            // sh внутри proot не исполняется — и serve не заведётся; fail fast.
+            throw java.io.IOException(
+                "proot не смог выполнить /bin/echo (код $echoCode) — проверьте экспорт логов",
+            )
+        }
+
+        val apkUsable = apkDirectCode == 0 || apkMuslCode == 0
+        if (apkUsable) {
             val pkgs = installer.apkPackages.joinToString(" ")
             val logFile = File(SandboxPaths.logs(this), "apk.log")
             logFile.writeText("")
             for (attempt in 1..2) {
                 checkStop()
                 setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempt из 2)")
-                val code = manager.runOnce("apk update && apk add --no-cache $pkgs", logFile, 600_000)
+                val code = manager.runOnce(
+                    "${muslApkPrefix}apk update && ${muslApkPrefix}apk add --no-cache $pkgs",
+                    logFile,
+                    600_000,
+                )
                 SandboxLogger.i("apk add попытка $attempt: код $code")
                 if (code == 0) return
                 if (attempt == 1) {
@@ -353,7 +411,7 @@ class RuntimeService : Service() {
             SandboxLogger.w("apk-путь не удался, переключаюсь на прямой bootstrap; apk.log: $tail")
         } else {
             SandboxLogger.w(
-                "apk не исполняется в proot (sh=$shCode, apk --version=$apkVersionCode) — прямой bootstrap",
+                "apk не исполняется в proot (direct=$apkDirectCode, ldmusl=$apkMuslCode) — прямой bootstrap",
             )
         }
 

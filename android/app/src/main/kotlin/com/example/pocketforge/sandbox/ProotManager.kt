@@ -18,7 +18,11 @@ class ProotManager(private val ctx: Context) {
 
     fun isAlive(): Boolean = processRef.get()?.isAlive == true
 
-    fun startServe(logFile: File) {
+    /// [muslPrefix] — префикс команды: если на устройстве прямой exec
+    /// динамических бинарей под proot молча умирает (код 255, вывод пуст —
+    /// см. boot.log preflight), а явный запуск через ld-musl работает,
+    /// передаётся «/lib/ld-musl-aarch64.so.1 » — другой execve-путь.
+    fun startServe(logFile: File, muslPrefix: String = "") {
         val rootfs = SandboxPaths.rootfs(ctx)
         val workspace = SandboxPaths.workspace(ctx)
         workspace.mkdirs()
@@ -37,8 +41,10 @@ class ProotManager(private val ctx: Context) {
             "-0",
             "-w", "/root",
             "/bin/sh", "-c",
-            "cd /root && exec /usr/local/bin/opencode serve --port $port " +
-                "--print-logs --log-level INFO",
+            // pf-serve-boot в логе ДОКАЗЫВАЕТ, что sh внутри proot выполнился:
+            // пустой serve.log после смерти proot неотличим от «sh не стартовал».
+            "echo pf-serve-boot && cd /root && exec ${muslPrefix}/usr/local/bin/opencode " +
+                "serve --port $port --print-logs --log-level INFO",
         )
 
         logFile.parentFile?.mkdirs()
