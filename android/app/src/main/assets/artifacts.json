@@ -5,7 +5,11 @@
     "sha256": "45407388777dfc1894591c9727c169f202ad92c75757038950630a0fbb12ca97",
     "sizeBytes": 78461019,
     "tarEntry": "opencode",
-    "installPath": "/usr/local/bin/opencode"
+    "installPath": "/usr/local/bin/opencode",
+    "binary": {
+      "size": 218963048,
+      "md5": "a5cd98132453eb5749411ca6c4d6667a"
+    }
   },
   "rootfs": {
     "distribution": "alpine",

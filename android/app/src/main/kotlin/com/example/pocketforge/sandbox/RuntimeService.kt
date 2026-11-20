@@ -215,11 +215,16 @@ class RuntimeService : Service() {
     private var ocDirectCode = -1
     private var ocMuslCode = -1
 
+    /// md5 opencode на устройстве (по пробе busybox md5sum при отказе exec) —
+    /// решающий факт: совпадает с эталоном → бинарь цел, проблема в либах/ROM;
+    /// не совпадает → файл на устройстве бит, ремонт переустановкой.
+    private var ocDeviceMd5: String? = null
+
     private fun bootSequence() {
         val t0 = System.currentTimeMillis()
         try {
             lastErrorSet(null)
-            SandboxLogger.i("=== boot: старт (v0.3.7) ===")
+            SandboxLogger.i("=== boot: старт (v0.3.8) ===")
 
             checkStop()
             setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs")
@@ -272,6 +277,13 @@ class RuntimeService : Service() {
                 SandboxLogger.i("apk-пакеты уже установлены (маркер есть)")
             }
 
+            // opencode не исполняется после установки пакетов — переустановка
+            // бинаря и библиотек (бит на ФС) и повторная матрица проб.
+            if (ocDirectCode != 0 && ocMuslCode != 0) {
+                repairAndRecheck(rootfs)
+            }
+            verifyToolchain(rootfs)
+
             checkStop()
             setState(Phase.STARTING, "Запуск opencode serve")
             val logFile = File(SandboxPaths.logs(this), "serve.log")
@@ -290,7 +302,11 @@ class RuntimeService : Service() {
                             "(sh выполнился, но opencode не напечатал ничего — отказ exec)"
                         else -> served
                     }
-                    throw java.io.IOException("proot завершился до успешного healthcheck; serve.log: $detail")
+                    val ec = manager.exitCode()
+                    throw java.io.IOException(
+                        "proot завершился до успешного healthcheck " +
+                            "(код=$ec); serve.log: $detail",
+                    )
                 }
                 val code = try {
                     HealthCheck.check(manager.port, manager.password)
@@ -333,23 +349,6 @@ class RuntimeService : Service() {
     /// пишутся в boot.log целиком — следующий экспорт логов будет содержать
     /// полный расклад даже если serve снова умрёт.
     private fun detectExecMode(rootfs: File) {
-        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
-
-        fun probe(name: String, cmd: String): Int {
-            checkLog.writeText("")
-            val code = try {
-                manager.runOnce(cmd, checkLog, 30_000)
-            } catch (e: IOException) {
-                SandboxLogger.w("probe $name: ${e.message}")
-                return -1
-            }
-            val out = HealthCheck.tail(checkLog, 200).trim().replace("\n", " | ")
-            SandboxLogger.i(
-                "probe $name: код $code${if (out.isEmpty()) if (code == 0) "" else " (молчаливый отказ)" else ", вывод: $out"}",
-            )
-            return code
-        }
-
         setState(Phase.STARTING, "Проверка режима исполнения песочницы")
         echoCode = probe("echo", "/bin/echo pf-proot-ok")
         shCode = probe("sh", "/bin/sh -c 'echo pf-sh-ok'")
@@ -366,10 +365,103 @@ class RuntimeService : Service() {
             "режим исполнения: serve-префикс='${muslServePrefix.trim().ifEmpty { "прямой" }}', " +
                 "apk-префикс='${muslApkPrefix.trim().ifEmpty { "прямой" }}'",
         )
-        if (muslServePrefix.isEmpty() && ocDirectCode != 0) {
+        if (ocDirectCode != 0 && ocMuslCode != 0) {
             SandboxLogger.w(
-                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — serve, вероятно, упадёт; нужен экспорт логов",
+                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — будет ремонт",
             )
+            // Решающий факт — md5 бинаря НА УСТРОЙСТВЕ (эталон в манифесте):
+            // md5sum на ~219 МБ занимает 1–3 с, допустимо.
+            ocDeviceMd5 = null
+            val refMd5 = installer.opencodeBinaryMd5()
+            if (refMd5 != null) {
+                val out = probeOut("opencode-md5", "md5sum /usr/local/bin/opencode", 120_000)
+                val deviceMd5 = out?.trim()?.substringBefore(' ')?.lowercase()
+                ocDeviceMd5 = deviceMd5
+                val verdict = when {
+                    deviceMd5 == null -> "не получен"
+                    deviceMd5 == refMd5 -> "СОВПАДАЕТ с эталоном ($refMd5) — файл цел, причина в либах/ROM"
+                    else -> "НЕ СОВПАДАЕТ: на устройстве $deviceMd5, эталон $refMd5 — файл бит"
+                }
+                SandboxLogger.i("верификация opencode md5: $verdict")
+            }
+        }
+    }
+
+    /// Проба с получением вывода (для сравнения с эталоном кодом).
+    private fun probeOut(name: String, cmd: String, timeoutMs: Long = 30_000): String? {
+        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
+        checkLog.writeText("")
+        val code = try {
+            manager.runOnce(cmd, checkLog, timeoutMs)
+        } catch (e: IOException) {
+            SandboxLogger.w("probe $name: ${e.message}")
+            return null
+        }
+        val out = HealthCheck.tail(checkLog, 400).trim()
+        SandboxLogger.i("probe $name: код $code, вывод: ${out.take(160)}")
+        return if (code == 0) out else null
+    }
+
+    /// Проба исполнения команды внутри proot с логом результата.
+    private fun probe(name: String, cmd: String, timeoutMs: Long = 30_000): Int {
+        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
+        checkLog.writeText("")
+        val code = try {
+            manager.runOnce(cmd, checkLog, timeoutMs)
+        } catch (e: IOException) {
+            SandboxLogger.w("probe $name: ${e.message}")
+            return -1
+        }
+        val out = HealthCheck.tail(checkLog, 200).trim().replace("\n", " | ")
+        SandboxLogger.i(
+            "probe $name: код $code${if (out.isEmpty()) if (code == 0) "" else " (молчаливый отказ)" else ", вывод: $out"}",
+        )
+        return code
+    }
+
+    /// Ремонт: opencode не исполняется после установки пакетов — переустановка
+    /// бинаря (force, с md5-верификацией записи) и всех apk-пакетов, затем
+    /// повторная матрица проб. Если md5 на устройстве не совпал с эталоном,
+    /// tar.gz-кеш инвалидируется (перекачка).
+    private fun repairAndRecheck(rootfs: File) {
+        checkStop()
+        setState(Phase.BOOTSTRAPPING_APK, "Ремонт: переустановка opencode и библиотек")
+        SandboxLogger.w(
+            "repair: opencode не исполняется ($ocDirectCode/$ocMuslCode), md5=${ocDeviceMd5 ?: "?"} — " +
+                "переустанавливаю бинарь и apk-пакеты",
+        )
+        val refMd5 = installer.opencodeBinaryMd5()
+        // Битые файлы: бинарь, его маркер, библиотеки libstdc++ (симлинк+файл).
+        File(rootfs, "usr/local/bin/opencode").delete()
+        File(rootfs, "usr/local/bin/.pf-opencode-version").delete()
+        File(rootfs, "usr/lib").listFiles()?.forEach { f ->
+            if (f.name.startsWith("libstdc++.so")) f.delete()
+        }
+        installer.ensureOpencode(rootfs, force = true)
+        NativeBootstrap(this).bootstrapPackages(rootfs, installer.apkPackages)
+        detectExecMode(rootfs)
+        if (ocDirectCode != 0 && ocMuslCode != 0) {
+            throw java.io.IOException(
+                "opencode не исполняется и после ремонта (direct=$ocDirectCode, ldmusl=$ocMuslCode, " +
+                    "md5=${ocDeviceMd5 ?: "?"} vs эталон ${refMd5 ?: "?"}) — пришлите экспорт логов",
+            )
+        }
+        SandboxLogger.i("repair: opencode исполняется после переустановки (direct=$ocDirectCode)")
+    }
+
+    /// Верификация тулчейна: динамические бинари из пакетов должны стартовать —
+    /// это факт целости УСТАНОВЛЕННЫХ БИБЛИОТЕК (libgcc, libpcre и т.д.).
+    private fun verifyToolchain(rootfs: File) {
+        setState(Phase.STARTING, "Проверка инструментов песочницы")
+        val rg = probe("rg", "/usr/bin/rg --version", 20_000)
+        val bash = probe("bash", "/bin/bash --version", 20_000)
+        val git = probe("git", "git --version", 20_000)
+        val bad = mutableListOf<String>()
+        if (rg != 0) bad.add("rg")
+        if (bash != 0) bad.add("bash")
+        if (git != 0) bad.add("git")
+        if (bad.isNotEmpty()) {
+            SandboxLogger.w("инструменты не стартуют: ${bad.joinToString(", ")} — библиотеки установлены битыми?")
         }
     }
 
@@ -383,8 +475,11 @@ class RuntimeService : Service() {
             )
         }
 
-        val apkUsable = apkDirectCode == 0 || apkMuslCode == 0
-        if (apkUsable) {
+        // apk --version мог быть 0, а apk add — умирать (реальный случай:
+        // 0.3.7 boot1 — две wasted попытки). Решает РЕАЛЬНАЯ проба: apk update
+        // требует сеть и запись — то же, что и apk add.
+        val apkUpdate = probe("apk-update", "${muslApkPrefix}apk update".trim(), 120_000)
+        if (apkUpdate == 0) {
             val pkgs = installer.apkPackages.joinToString(" ")
             val logFile = File(SandboxPaths.logs(this), "apk.log")
             logFile.writeText("")
@@ -392,7 +487,7 @@ class RuntimeService : Service() {
                 checkStop()
                 setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempt из 2)")
                 val code = manager.runOnce(
-                    "${muslApkPrefix}apk update && ${muslApkPrefix}apk add --no-cache $pkgs",
+                    "${muslApkPrefix}apk add --no-cache $pkgs",
                     logFile,
                     600_000,
                 )
@@ -411,7 +506,7 @@ class RuntimeService : Service() {
             SandboxLogger.w("apk-путь не удался, переключаюсь на прямой bootstrap; apk.log: $tail")
         } else {
             SandboxLogger.w(
-                "apk не исполняется в proot (direct=$apkDirectCode, ldmusl=$apkMuslCode) — прямой bootstrap",
+                "apk update не исполняется в proot (код $apkUpdate, direct=$apkDirectCode, ldmusl=$apkMuslCode) — прямой bootstrap",
             )
         }
 

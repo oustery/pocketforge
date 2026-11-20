@@ -1,5 +1,5 @@
 {
-  "version": "0.3.7",
-  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.7-arm64.apk",
-  "notes": "Автоопределение режима исполнения: если opencode не запускается напрямую под proot, serve и apk запускаются через явный ld-musl загрузчик; маркер pf-serve-boot и полная матрица проб в boot.log"
+  "version": "0.3.8",
+  "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.8-arm64.apk",
+  "notes": "Верификация целостности: md5-эталон opencode (запись на ФС + проба на устройстве), недочитка tar/apk файлов падает с фактом, sha256-проверка кеша, авто-ремонт переустановкой, apk-путь по реальной пробе apk update, проверка rg/bash/git, полный расклад в boot.log"
 }

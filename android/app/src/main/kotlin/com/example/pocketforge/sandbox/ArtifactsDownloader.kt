@@ -29,6 +29,14 @@ object ArtifactsDownloader {
         dest.parentFile?.mkdirs()
         val part = File(dest.parentFile, dest.name + ".part")
 
+        // Готовый кеш с прошлого запуска — в дело только если он ЦЕЛ: битый
+        // кеш (обрыв записи на ФС) иначе навсегда выдаёт порченый артефакт.
+        if (dest.exists() && dest.length() > 0) {
+            if (sha256(dest).equals(expectedSha256, ignoreCase = true)) return dest
+            SandboxLogger.w("кеш $dest бит (sha256 не совпал) — перекачка")
+            dest.delete()
+        }
+
         // Полный .part с прошлого запуска — сразу в дело, без сети.
         if (isComplete(part, expectedSha256)) return promote(part, dest)
 

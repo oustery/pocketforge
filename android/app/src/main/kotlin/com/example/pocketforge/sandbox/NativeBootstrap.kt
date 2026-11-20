@@ -99,26 +99,29 @@ class NativeBootstrap(
         val chosen = LinkedHashMap<String, Pkg>()
         val queue = ArrayDeque<String>()
         queue.addAll(seed)
-        var skipped = 0
+        val skippedNames = mutableListOf<String>()
         while (queue.isNotEmpty()) {
             val dep = queue.removeFirst()
             if (dep == "-" || dep.startsWith("/")) {
                 // '-' = нет зависимостей; '/bin/sh' и пути предоставляет busybox
-                skipped++
+                skippedNames.add(dep)
                 continue
             }
             val name = dep.substringBefore('=')
             val pkg = byName[name] ?: providers[name]?.minByOrNull { it.name }
             if (pkg == null) {
                 SandboxLogger.w("native bootstrap: зависимость $dep не найдена — пропуск")
-                skipped++
+                skippedNames.add(dep)
                 continue
             }
             if (chosen.containsKey(pkg.name)) continue
             chosen[pkg.name] = pkg
             queue.addAll(pkg.depends)
         }
-        SandboxLogger.i("native bootstrap: пропущено зависимостей: $skipped")
+        SandboxLogger.i(
+            "native bootstrap: пропущено зависимостей: ${skippedNames.size}" +
+                if (skippedNames.isEmpty()) "" else " (${skippedNames.joinToString(", ")})",
+        )
         return chosen.values.toList()
     }
 

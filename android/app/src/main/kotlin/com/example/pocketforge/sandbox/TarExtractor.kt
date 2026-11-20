@@ -129,6 +129,16 @@ object TarExtractor {
                                     out.write(buf, 0, chunk)
                                     remaining -= chunk
                                 }
+                                // Недочитка = битый файл в rootfs, который потом
+                                // умирает МОЛЧА при exec (реальный случай на
+                                // устройстве: «symbol not found» ld-musl). Падаем
+                                // сразу с фактом вместо тихой порчи.
+                                if (remaining > 0) {
+                                    throw IOException(
+                                        "tar: файл $entryName недочитан: " +
+                                            "${size - remaining} из $size байт",
+                                    )
+                                }
                             }
                             if (mode and 0b000111L != 0L) target.setExecutable(true, false)
                         }
@@ -295,6 +305,15 @@ object TarExtractor {
                                 if (chunk <= 0) break
                                 out.write(buf, 0, chunk)
                                 remaining -= chunk
+                            }
+                            // Недочитка apk-записи = битая библиотека/бинарь в
+                            // rootfs; молчаливая порча вызывала «symbol not
+                            // found» у opencode. Падаем с фактом сразу.
+                            if (remaining > 0) {
+                                throw IOException(
+                                    "apk: файл $entryName недочитан: " +
+                                        "${size - remaining} из $size байт",
+                                )
                             }
                         }
                         if (mode and 0b000111L != 0L) target.setExecutable(true, false)

@@ -97,11 +97,12 @@ class RootfsInstaller(private val ctx: Context) {
         rootfs: File,
         onProgress: (Long, Long) -> Unit = { _, _ -> },
         shouldStop: () -> Boolean = { false },
+        force: Boolean = false,
     ): File {
         val oc = artifacts.getJSONObject("opencode")
         val marker = File(rootfs, "usr/local/bin/.pf-opencode-version")
         val binary = File(rootfs, oc.getString("installPath").removePrefix("/"))
-        if (marker.exists() && marker.readText().trim() == oc.getString("version") && binary.exists()) {
+        if (!force && marker.exists() && marker.readText().trim() == oc.getString("version") && binary.exists()) {
             return binary
         }
         val tar = ArtifactsDownloader.download(
@@ -115,13 +116,61 @@ class RootfsInstaller(private val ctx: Context) {
         // tar содержит ./opencode
         val extracted = File(SandboxPaths.artifacts(ctx), oc.getString("tarEntry"))
         if (!extracted.exists()) throw IOException("opencode не найден в архиве")
+        // Верификация распакованного бинаря против эталона из манифеста:
+        // tar.gz скачан с sha256-проверкой, значит внутри цел; порча возможна
+        // при записи файла на ФС — она проявлялась как молчаливый отказ exec
+        // («Error relocating … symbol not found») много позже точки ошибки.
+        val wantMd5 = oc.getJSONObject("binary").optString("md5", "")
+        val wantSize = oc.getJSONObject("binary").optLong("size", 0L)
+        val gotMd5 = md5(extracted)
+        if (wantMd5.isNotEmpty() && !gotMd5.equals(wantMd5, ignoreCase = true)) {
+            extracted.delete()
+            throw IOException(
+                "md5 распакованного opencode не совпал: $gotMd5 вместо $wantMd5 " +
+                    "(размер ${extracted.length()}); артефакт удалён — нужна перекачка",
+            )
+        }
+        if (wantSize > 0L && extracted.length() != wantSize) {
+            extracted.delete()
+            throw IOException(
+                "размер распакованного opencode ${extracted.length()} вместо $wantSize",
+            )
+        }
         binary.parentFile?.mkdirs()
+        binary.delete() // существующий файл мог быть битым — пишем заново
         extracted.copyTo(binary, overwrite = true)
+        val installedMd5 = md5(binary)
+        if (wantMd5.isNotEmpty() && !installedMd5.equals(wantMd5, ignoreCase = true)) {
+            binary.delete()
+            marker.delete()
+            throw IOException(
+                "md5 opencode ПОСЛЕ записи на ФС не совпал: $installedMd5 вместо $wantMd5 " +
+                    "(до записи было $gotMd5) — носитель портит файл",
+            )
+        }
         binary.setExecutable(true, false)
         extracted.delete()
         marker.writeText(oc.getString("version"))
         return binary
     }
+
+    private fun md5(file: File): String {
+        val md = java.security.MessageDigest.getInstance("MD5")
+        file.inputStream().use { input ->
+            val buf = ByteArray(64 * 1024)
+            while (true) {
+                val n = input.read(buf)
+                if (n <= 0) break
+                md.update(buf, 0, n)
+            }
+        }
+        return md.digest().joinToString("") { "%02x".format(it) }
+    }
+
+    /// Эталонный md5 opencode-бинаря из манифеста (для сверки с устройством).
+    fun opencodeBinaryMd5(): String? =
+        artifacts.getJSONObject("opencode").getJSONObject("binary").optString("md5")
+            .takeIf { it.isNotEmpty() }
 
     /// DNS внутри песочницы. Android не предоставляет /etc/resolv.conf, а
     /// публичные резолверы (8.8.8.8/1.1.1.1) операторы часто блокируют — тогда
