@@ -6,7 +6,6 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
-import 'package:pocketforge/core/platform/sandbox_channel.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
 import 'package:pocketforge/features/update/update_service.dart';
 
@@ -34,14 +33,17 @@ class _LogsExportRowState extends ConsumerState<LogsExportRow> {
     try {
       final path = await ref.read(sandboxChannelProvider).exportLogs();
       if (!mounted) return;
-      String status = 'Экспорт недоступен на этом устройстве';
-      if (path != null) {
-        final fileName = path.split('/').last;
-        status = 'Логи собраны, откроется окно отправки: $fileName';
+      if (path == null) {
+        setState(() {
+          _busy = false;
+          _status = 'Экспорт недоступен на этом устройстве';
+        });
+        return;
       }
       setState(() {
         _busy = false;
-        _status = status;
+        _status =
+            'Логи собраны, откроется окно отправки: ${path.split('/').last}';
       });
     } on Exception catch (e) {
       if (mounted) {
