@@ -63,8 +63,10 @@ class ProotManager(private val ctx: Context) {
         Log.i(TAG, "proot запущен, порт=$port")
     }
 
-    /// Разовая команда внутри песочницы (bootstrap apk-пакетов).
-    fun runOnce(shellCommand: String, logFile: File): Int {
+    /// Разовая команда внутри песочницы (bootstrap apk-пакетов, preflight).
+    /// [timeoutMs] обязателен: без него зависший apk (мертвая сеть) вечно
+    /// держал бы boot-фазу — watchdog на не-READY не работает.
+    fun runOnce(shellCommand: String, logFile: File, timeoutMs: Long = 600_000L): Int {
         val rootfs = SandboxPaths.rootfs(ctx)
         val proot = File(ctx.applicationInfo.nativeLibraryDir, "libproot.so")
         val args = mutableListOf(
@@ -90,7 +92,14 @@ class ProotManager(private val ctx: Context) {
             }
         }
         val p = pb.start()
-        return p.waitFor()
+        val finished = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
+        if (!finished) {
+            p.destroyForcibly()
+            throw IOException(
+                "Команда не завершилась за $timeoutMs мс и была убита: $shellCommand",
+            )
+        }
+        return p.exitValue()
     }
 
     /// Разовая команда с захватом stdout/stderr по отдельности (M7 терминал).

@@ -1,6 +1,7 @@
 package com.example.pocketforge.sandbox
 
 import android.util.Log
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -218,6 +219,177 @@ object TarExtractor {
             File(entry.parentFile, linkName)
         }
         return f.takeIf { it.exists() }
+    }
+
+    /// Распаковка apk-пакета (apk-tools v3: ПОДРЯД идущие gzip-потоки, внутри
+    /// tar-записи). Контрольные записи (.SIGN.*, .PKGINFO, .pre-*/.post-*,
+    /// DESCRIPTION) пропускаются по именам — END-маркеры в контрольных
+    /// секциях отсутствуют (проверено на реальных пакетах v3.24). GZIP-
+    /// InputStream сам читает concatenated members. Данные создаются той же
+    /// логикой, что и rootfs: симлинк → hardlink → копия.
+    fun extractApkSections(apk: File, destDir: File) {
+        val issues = mutableListOf<String>()
+        var fallbacks = 0
+        val onFallback = { fallbacks++ }
+        GZIPInputStream(FileInputStream(apk)).use { gz ->
+            val header = ByteArray(512)
+            var paxPath: String? = null
+            while (true) {
+                if (!readFully(gz, header)) break
+                if (header.all { it.toInt() == 0 }) continue // END-маркеры (data)
+                val nameField = cString(header, 0, 100)
+                val size = octal(header, 124, 12)
+                val typeflag = header[156].toInt().toChar()
+                val linkName = cString(header, 157, 100)
+                val mode = octal(header, 100, 8)
+                when (typeflag) {
+                    'L' -> {
+                        val buf = ByteArray(size.toInt())
+                        readFully(gz, buf)
+                        skipPadding(gz, size)
+                        paxPath = cString(buf, 0, buf.size)
+                        continue
+                    }
+                    'x' -> {
+                        val buf = ByteArray(size.toInt())
+                        readFully(gz, buf)
+                        skipPadding(gz, size)
+                        paxPath = paxValue(buf, "path") ?: paxPath
+                        continue
+                    }
+                    'g' -> {
+                        skip(gz, size)
+                        skipPadding(gz, size)
+                        continue
+                    }
+                }
+                val entryName = (paxPath ?: nameField).trim('/')
+                paxPath = null
+                if (entryName.isEmpty() || isControlEntry(entryName)) {
+                    skip(gz, size)
+                    skipPadding(gz, size)
+                    continue
+                }
+                val target = File(destDir, entryName)
+                check(target.canonicalPath.startsWith(destDir.canonicalPath + File.separator) ||
+                    target.canonicalPath == destDir.canonicalPath) {
+                    "apk-элемент выходит за пределы каталога: $entryName"
+                }
+                when (typeflag) {
+                    '5' -> target.mkdirs()
+                    '2' -> {
+                        skip(gz, size)
+                        createSymlinkEntry(destDir, target, linkName, entryName, issues, onFallback)
+                    }
+                    '1' -> {
+                        skip(gz, size)
+                        createHardlinkEntry(target, destDir, linkName, entryName, issues, onFallback)
+                    }
+                    else -> {
+                        target.parentFile?.mkdirs()
+                        FileOutputStream(target).use { out ->
+                            var remaining = size
+                            val buf = ByteArray(64 * 1024)
+                            while (remaining > 0) {
+                                val chunk = gz.read(buf, 0, minOf(buf.size.toLong(), remaining).toInt())
+                                if (chunk <= 0) break
+                                out.write(buf, 0, chunk)
+                                remaining -= chunk
+                            }
+                        }
+                        if (mode and 0b000111L != 0L) target.setExecutable(true, false)
+                    }
+                }
+                skipPadding(gz, size)
+            }
+        }
+        if (fallbacks > 0) Log.i(TAG, "apk: fallback-ссылок $fallbacks")
+        if (issues.isNotEmpty()) Log.w(TAG, "apk: проблемы распаковки: $issues")
+    }
+
+    private fun isControlEntry(name: String): Boolean =
+        name == ".PKGINFO" || name == "DESCRIPTION" || name.startsWith(".SIGN.") ||
+            name.startsWith(".pre-") || name.startsWith(".post-")
+
+    /// Читает APKINDEX из распакованного tar-контента (multi-member gzip).
+    /// Возвращает число пакетов; в [onPkg] — name/version/size/depends/provides.
+    fun parseApkIndex(
+        file: File,
+        onPkg: (name: String, version: String, size: Long, depends: List<String>, provides: List<String>) -> Unit,
+    ): Int = parseApkIndex(file.readBytes(), onPkg)
+
+    fun parseApkIndex(
+        raw: ByteArray,
+        onPkg: (name: String, version: String, size: Long, depends: List<String>, provides: List<String>) -> Unit,
+    ): Int {
+        val content = ByteArrayOutputStream()
+        GZIPInputStream(java.io.ByteArrayInputStream(raw)).use { gz ->
+            val header = ByteArray(512)
+            var paxPath: String? = null
+            while (true) {
+                if (!readFully(gz, header)) break
+                if (header.all { it.toInt() == 0 }) continue
+                val size = octal(header, 124, 12)
+                val typeflag = header[156].toInt().toChar()
+                val nameField = cString(header, 0, 100)
+                when (typeflag) {
+                    'L' -> {
+                        val buf = ByteArray(size.toInt())
+                        readFully(gz, buf)
+                        skipPadding(gz, size)
+                        paxPath = cString(buf, 0, buf.size)
+                        continue
+                    }
+                    'x' -> {
+                        val buf = ByteArray(size.toInt())
+                        readFully(gz, buf)
+                        skipPadding(gz, size)
+                        paxPath = paxValue(buf, "path") ?: paxPath
+                        continue
+                    }
+                    'g' -> {
+                        skip(gz, size)
+                        skipPadding(gz, size)
+                        continue
+                    }
+                }
+                val entryName = (paxPath ?: nameField).trim('/')
+                paxPath = null
+                if (entryName == "APKINDEX") {
+                    val buf = ByteArray(size.toInt())
+                    readFully(gz, buf)
+                    content.write(buf)
+                } else {
+                    skip(gz, size)
+                }
+                skipPadding(gz, size)
+            }
+        }
+        var count = 0
+        val text = content.toString("UTF-8")
+        for (block in text.split("\n\n")) {
+            var name = ""
+            var version = ""
+            var size = 0L
+            val depends = mutableListOf<String>()
+            val provides = mutableListOf<String>()
+            for (line in block.lines()) {
+                if (line.length < 3 || line[1] != ':') continue
+                val value = line.substring(2)
+                when (line[0]) {
+                    'P' -> name = value
+                    'V' -> version = value
+                    'S' -> size = value.trim().toLongOrNull() ?: 0L
+                    'D' -> depends.addAll(value.split(' ').filter { it.isNotEmpty() })
+                    'p', 'i' -> provides.addAll(value.split(' ').filter { it.isNotEmpty() })
+                }
+            }
+            if (name.isNotEmpty()) {
+                onPkg(name, version, size, depends, provides)
+                count++
+            }
+        }
+        return count
     }
 
     private fun readFully(input: java.io.InputStream, buf: ByteArray): Boolean {

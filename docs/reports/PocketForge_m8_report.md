@@ -195,3 +195,51 @@ apk.log** (0.3.4 приклеивает хвост только к непуст�
   qemu-user в сборочном сандбоксе недоступен — runtime-проверку делает
   echo-самотест на устройстве.
 - Версия 0.3.5+8.
+
+## 9. Аудит всего функционального ядра и обход «той же ошибки» (0.3.6)
+
+После 0.3.5 на устройстве ошибка повторялась. Полный аудит (все Kotlin- и
+свои Dart-файлы) + реверс формата пакетов на реальных данных CDN привели к
+радикальному решению и ряду дефектов, найденных по четырём осям
+(полнота/исключения/костыли/логирование).
+
+**Главное — bootstrap пакетов больше не зависит от исполнения под proot:**
+- На устройстве apk-процесс под proot-трассировкой умирал молча (255) даже
+  при корректном rootfs (preflight-echo прошёл бы только с рабочим sh).
+  Единственный путь установки пакетов был сломан на уровне ROM.
+- Формат apk-пакета вскрыт на реальных файлах v3.24: файл из ПОДРЯД идущих
+  gzip-потоков (java GZIPInputStream читает concatenated members), внутри
+  tar-записи: контрольные (.SIGN.*, .PKGINFO, .pre/.post-скрипты — БЕЗ
+  END-маркеров) и данные. Целостность: размер (S:) + TLS; зависимость
+  ca-certificates-bundle несёт готовый ca-certificates.crt — скрипты
+  .post-install не нужны.
+- `NativeBootstrap` (новый): APKINDEX main+community → BFS-резолвинг
+  зависимостей (so:/cmd: — по provides, «/bin/sh» — busybox, strip
+  =version; прототип подтвердил: 25 пакетов, ~13 МБ, все ключевые файлы
+  bash/rg/curl/git/ca-bundle на месте) → скачивание через Android-стек
+  (системный DNS!) → распаковка в rootfs тем же fallback-движком ссылок.
+- Логика запуска: preflight-серия (echo → sh → apk --version) с логами;
+  echo fail → быстрый fail с фактами всех проб; apk --version fail → сразу
+  прямой bootstrap; иначе apk-путь ×2 → при отказе прямой bootstrap.
+
+**Найденные аудитом дефекты — исправлены:**
+- **Крэш watchdog**: `executor.shutdownNow()` в onDestroy гнал
+  RejectedExecutionException в handler-поток (крэш приложения) —
+  флаг destroyed + try/catch.
+- **Stop-гонка**: «Стоп» ставился в очередь single-thread executor ПОСЛЕ
+  boot (5 сетевых попыток) — теперь флаг `stopRequested` выставляется
+  немедленно в onStartCommand, proot гасится сразу, boot-циклы проверяют
+  флаг; загрузки прерываются через `shouldStop`-колбэк до ArtifactsDownloader.
+- **runOnce без таймаута**: зависший apk вечно держал boot — таймаут
+  (preflight 30 с, apk 10 мин) + destroyForcibly.
+- **ArtifactsDownloader**: HTTP 4xx теперь явная неретраимая ошибка
+  (раньше уходил в sha256 несуществующего файла ×5 попыток); обрыв докачки
+  (Range) не проверялся — .part перезакачивался с нуля молча.
+- **Логирование**: единый `boot.log` (SandboxLogger, ротация 512 КБ) с
+  каждым шагом boot; в карточке ошибки — хвост boot.log; панель лога
+  показывает boot+apk+serve.
+- **Экспорт логов**: кнопка «Экспорт логов» в настройках → zip (boot/apk/
+  serve/proot-check + meta: версия/ABI/SDK) через FileProvider+share-шит
+  (cache-path «export» добавлен в file_paths.xml).
+- Dart: метод `exportLogs` канала, кнопка с обработкой ошибок.
+- Версия 0.3.6+10.

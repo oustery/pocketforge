@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- M6: пути для FileProvider (установка update-APK) -->
+<!-- M6: пути для FileProvider (установка update-APK); M9: экспорт логов -->
 <paths>
     <cache-path name="apks_cache" path="updates/"/>
     <files-path name="apks_files" path="updates/"/>
+    <cache-path name="export" path="export/"/>
 </paths>

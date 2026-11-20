@@ -46,6 +46,20 @@ class RuntimeService : Service() {
         private var serviceInstance: RuntimeService? = null
         var methodChannel: MethodChannel? = null
 
+        /// Флаг немедленной остановки: выставляется в onStartCommand ДО
+        /// постановки в executor (single-thread) — иначе stop ждал бы конца
+        /// boot-секции (сеть до 5 попыток). Проверяется в циклах boot.
+        @Volatile
+        var stopRequested: Boolean = false
+            private set
+
+        @Volatile
+        private var destroyed: Boolean = false
+
+        fun lastErrorSet(value: String?) = synchronized(stateLock) {
+            lastError = value
+        }
+
         fun currentStateMap(): Map<String, Any?> = synchronized(stateLock) {
             val svc = serviceInstance
             // В панели лога показываем и загрузочный лог: до READY serve.log
@@ -53,9 +67,11 @@ class RuntimeService : Service() {
             val logTail = svc?.let {
                 val apkTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apk.log"), 4096).trim()
                 val serveTail = HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log"), 4096).trim()
+                val bootTail = SandboxLogger.tail(2048).trim()
                 buildString {
-                    if (apkTail.isNotEmpty()) append("── apk.log ──\n$apkTail\n")
-                    if (serveTail.isNotEmpty()) append("── serve.log ──\n$serveTail")
+                    if (bootTail.isNotEmpty()) append("── boot.log ──\n$bootTail\n")
+                    if (apkTail.isNotEmpty()) append("\n── apk.log ──\n$apkTail\n")
+                    if (serveTail.isNotEmpty()) append("\n── serve.log ──\n$serveTail")
                 }
             } ?: ""
             mapOf(
@@ -134,6 +150,7 @@ class RuntimeService : Service() {
     override fun onCreate() {
         super.onCreate()
         SandboxPaths.ensureAll(this)
+        SandboxLogger.init(this)
         manager = ProotManager(this)
         installer = RootfsInstaller(this)
         executor = Executors.newSingleThreadExecutor()
@@ -146,9 +163,15 @@ class RuntimeService : Service() {
         startForegroundCompat()
         when (intent?.action) {
             ACTION_STOP -> {
+                // Немедленно: флаг до executor (boot прервётся в ближайшей
+                /// проверке), proot гасим сразу — waitFor вернёт управление.
+                stopRequested = true
+                manager.stop()
                 executor.execute { shutdown() }
             }
             ACTION_RESET -> {
+                stopRequested = true
+                manager.stop()
                 executor.execute {
                     shutdown()
                     SandboxPaths.wipe(this)
@@ -156,6 +179,7 @@ class RuntimeService : Service() {
                 }
             }
             else -> {
+                stopRequested = false
                 if (phase == Phase.READY || phase == Phase.STARTING ||
                     phase == Phase.INSTALLING_ROOTFS || phase == Phase.DOWNLOADING_OPENCODE ||
                     phase == Phase.BOOTSTRAPPING_APK
@@ -171,89 +195,69 @@ class RuntimeService : Service() {
     }
 
     private fun bootSequence() {
+        val t0 = System.currentTimeMillis()
         try {
-            lastError = null
+            lastErrorSet(null)
+            SandboxLogger.i("=== boot: старт (v0.3.6) ===")
 
+            checkStop()
             setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs")
-            val rootfs = installer.ensureRootfs { bytes, total ->
-                if (total > 0) {
-                    setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs", bytes / total.toDouble())
-                }
-            }
+            val rootfs = installer.ensureRootfs(
+                { bytes, total ->
+                    if (total > 0) {
+                        setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs", bytes / total.toDouble())
+                    }
+                },
+                { stopRequested },
+            )
+            SandboxLogger.i("rootfs готов (${installer.rootfsVersion}, bin/sh=${File(rootfs, "bin/sh").exists()})")
 
-            // DNS/репозитории обновляем на каждый запуск: сеть (и DNS оператора)
-            // могла смениться с прошлой установки (Wi-Fi ↔ мобильная).
+            checkStop()
             installer.writeResolvConf(rootfs)
             installer.ensureRepositories(rootfs)
+            SandboxLogger.i("resolv.conf/repositories обновлены")
 
+            checkStop()
             setState(Phase.DOWNLOADING_OPENCODE, "Загрузка opencode ${installer.opencodeVersion}")
-            installer.ensureOpencode(rootfs) { bytes, total ->
-                if (total > 0) {
-                    setState(
-                        Phase.DOWNLOADING_OPENCODE,
-                        "Загрузка opencode ${installer.opencodeVersion}",
-                        bytes / total.toDouble(),
-                    )
-                }
-            }
+            installer.ensureOpencode(
+                rootfs,
+                { bytes, total ->
+                    if (total > 0) {
+                        setState(
+                            Phase.DOWNLOADING_OPENCODE,
+                            "Загрузка opencode ${installer.opencodeVersion}",
+                            bytes / total.toDouble(),
+                        )
+                    }
+                },
+                { stopRequested },
+            )
+            SandboxLogger.i("opencode ${installer.opencodeVersion} готов")
 
             val apkMarker = File(rootfs, ".pf-apk-bootstrap")
-            val pkgs = installer.apkPackages.joinToString(" ")
             if (!apkMarker.exists()) {
-                // Самотест proot ДО apk: отделяем «не запускается /bin/sh в
-                // proot» (молчаливый 255, вывод пуст — см. TarExtractor) от
-                // «apk не смог скачать пакеты» (в apk.log есть строки).
-                val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
-                val checkCode = manager.runOnce("/bin/echo pf-proot-ok", checkLog)
-                if (checkCode != 0) {
-                    val tail = HealthCheck.tail(checkLog, 400).trim()
-                    throw java.io.IOException(
-                        "proot не смог выполнить /bin/echo в песочнице (код $checkCode); " +
-                            "вывод: ${if (tail.isEmpty()) "(пусто)" else tail}",
-                    )
-                }
-                val logFile = File(SandboxPaths.logs(this), "apk.log")
-                var code = -1
-                var attempts = 0
-                // 2 попытки: одиночный сбой DNS/обрыв канала на мобильной сети
-                // не должен валить всю установку.
-                while (attempts < 2) {
-                    attempts++
-                    setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempts из 2)")
-                    code = manager.runOnce("apk update && apk add --no-cache $pkgs", logFile)
-                    if (code == 0) break
-                    if (attempts < 2) {
-                        try {
-                            Thread.sleep(3000)
-                        } catch (_: InterruptedException) {
-                            Thread.currentThread().interrupt()
-                            throw java.io.IOException("Bootstrap прерван")
-                        }
-                    }
-                }
-                if (code != 0) {
-                    // Показываем реальный вывод apk в карточке ошибки — иначе
-                    // «(нет сети?)» остаётся догадкой (проверено на устройстве).
-                    val tail = HealthCheck.tail(logFile, 600).trim()
-                    val cause = if (tail.isEmpty()) {
-                        " (вывод apk пуст — обычно это отказ execve внутри proot)"
-                    } else {
-                        ". Хвост apk.log:\n$tail"
-                    }
-                    throw java.io.IOException("apk add завершился с кодом $code$cause")
-                }
+                bootstrapApkPackages(rootfs)
                 apkMarker.writeText(installer.opencodeVersion)
+                SandboxLogger.i("apk-маркер поставлен")
+            } else {
+                SandboxLogger.i("apk-пакеты уже установлены (маркер есть)")
             }
 
+            checkStop()
             setState(Phase.STARTING, "Запуск opencode serve")
             val logFile = File(SandboxPaths.logs(this), "serve.log")
             manager.startServe(logFile)
             healthy = false
+            SandboxLogger.i("proot запущен, порт=${manager.port}")
 
             val deadline = System.currentTimeMillis() + 90_000
             while (System.currentTimeMillis() < deadline) {
+                checkStop()
                 if (!manager.isAlive()) {
-                    throw java.io.IOException("proot завершился до успешного healthcheck")
+                    throw java.io.IOException(
+                        "proot завершился до успешного healthcheck; " +
+                            "serve.log: ${HealthCheck.tail(logFile, 400).trim().ifEmpty { "(пусто)" }}",
+                    )
                 }
                 val code = try {
                     HealthCheck.check(manager.port, manager.password)
@@ -262,56 +266,151 @@ class RuntimeService : Service() {
                 }
                 if (code == 200) {
                     healthy = true
+                    SandboxLogger.i("healthcheck 200, boot завершён за ${System.currentTimeMillis() - t0} мс")
                     setState(Phase.READY, "Готово: 127.0.0.1:${manager.port}")
                     return
                 }
                 Thread.sleep(1000)
             }
-            throw java.io.IOException("healthcheck не прошёл за 90 секунд")
+            throw java.io.IOException(
+                "healthcheck не прошёл за 90 секунд; " +
+                    "serve.log: ${HealthCheck.tail(logFile, 400).trim().ifEmpty { "(пусто)" }}",
+            )
         } catch (e: Exception) {
-            Log.e(TAG, "bootSequence failed", e)
+            SandboxLogger.e("boot failed", e)
             healthy = false
-            lastError = e.message ?: e.javaClass.simpleName
+            val msg = e.message?.takeIf { it.isNotBlank() } ?: e.javaClass.simpleName
+            lastErrorSet(msg)
             manager.stop()
-            setState(Phase.ERROR, "Ошибка запуска: ${lastError}")
+            if (stopRequested) {
+                setState(Phase.STOPPED, "Песочница остановлена")
+            } else {
+                val bootTail = SandboxLogger.tail(600).trim()
+                setState(Phase.ERROR, "Ошибка запуска: $msg${if (bootTail.isEmpty()) "" else "\nЛог: $bootTail"}")
+            }
         }
+    }
+
+    private fun checkStop() {
+        if (stopRequested) throw java.io.IOException("Песочница остановлена")
+    }
+
+    /// Установка apk-пакетов: preflight-серия (echo/sh/apk --version) с
+    /// логированием, затем apk внутри proot; при отказе apk-процесса —
+    /// прямой bootstrap через Android-сеть (без исполнения под proot).
+    private fun bootstrapApkPackages(rootfs: File) {
+        val checkLog = File(SandboxPaths.logs(this), "proot-check.log")
+        val results = mutableListOf<String>()
+
+        fun probe(name: String, cmd: String, timeoutMs: Long): Int {
+            checkLog.writeText("")
+            val code = try {
+                manager.runOnce(cmd, checkLog, timeoutMs)
+            } catch (e: IOException) {
+                results += "$name: ${e.message}"
+                SandboxLogger.w("preflight $name: ${e.message}")
+                return -1
+            }
+            val out = HealthCheck.tail(checkLog, 200).trim().replace("\n", " | ")
+            results += "$name: код $code${if (out.isEmpty()) "" else ", вывод: $out"}"
+            SandboxLogger.i("preflight $name: код $code${if (out.isEmpty()) "" else ", вывод: $out"}")
+            return code
+        }
+
+        setState(Phase.BOOTSTRAPPING_APK, "Проверка песочницы (preflight)")
+        val echoCode = probe("echo", "/bin/echo pf-proot-ok", 30_000)
+        if (echoCode != 0) {
+            // sh внутри proot не исполняется — и serve не заведётся; быстрый
+            // fail с фактами всех микротестов.
+            throw java.io.IOException(
+                "proot не смог выполнить /bin/echo (код $echoCode); пробы: ${results.joinToString("; ")}",
+            )
+        }
+        val shCode = probe("sh", "/bin/sh -c 'echo pf-sh-ok'", 30_000)
+        val apkVersionCode = probe("apk --version", "apk --version", 30_000)
+
+        if (shCode == 0 && apkVersionCode == 0) {
+            val pkgs = installer.apkPackages.joinToString(" ")
+            val logFile = File(SandboxPaths.logs(this), "apk.log")
+            logFile.writeText("")
+            for (attempt in 1..2) {
+                checkStop()
+                setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempt из 2)")
+                val code = manager.runOnce("apk update && apk add --no-cache $pkgs", logFile, 600_000)
+                SandboxLogger.i("apk add попытка $attempt: код $code")
+                if (code == 0) return
+                if (attempt == 1) {
+                    try {
+                        Thread.sleep(3000)
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+            }
+            val tail = HealthCheck.tail(logFile, 600).trim()
+            SandboxLogger.w("apk-путь не удался, переключаюсь на прямой bootstrap; apk.log: $tail")
+        } else {
+            SandboxLogger.w(
+                "apk не исполняется в proot (sh=$shCode, apk --version=$apkVersionCode) — прямой bootstrap",
+            )
+        }
+
+        // Прямой bootstrap: скачивание через Android-стек, распаковка в rootfs.
+        setState(Phase.BOOTSTRAPPING_APK, "Установка пакетов через сеть Android (без proot)")
+        val nb = NativeBootstrap(ctx) { pkg, done, total ->
+            val pct = if (total > 0) done * 100 / total else -1
+            setState(
+                Phase.BOOTSTRAPPING_APK,
+                "Установка пакетов: $pkg (${pct.takeIf { it >= 0 } ?: "…"}%)",
+            )
+        }
+        nb.bootstrapPackages(rootfs, installer.apkPackages)
+        SandboxLogger.i("прямой bootstrap завершён")
     }
 
     private fun startWatchdog() {
         watchdogHandler.postDelayed(object : Runnable {
             override fun run() {
-                executor.execute {
-                    val p = manager
-                    if (phase == Phase.READY) {
-                        if (!p.isAlive()) {
-                            Log.w(TAG, "watchdog: proot мёртв — перезапуск")
-                            healthFailures.set(0)
-                            setState(Phase.STARTING, "watchdog: перезапуск песочницы")
-                            bootSequence()
-                            return@execute
-                        }
-                        val code = try {
-                            HealthCheck.check(p.port, p.password)
-                        } catch (_: java.io.IOException) {
-                            -1
-                        }
-                        if (code == 200) {
-                            healthFailures.set(0)
-                            if (!healthy) {
-                                healthy = true
-                                pushToFlutter()
-                            }
-                        } else {
-                            val fails = healthFailures.incrementAndGet()
-                            Log.w(TAG, "watchdog: health=$code, подряд=$fails")
-                            if (fails >= 3) {
+                // executor.shutdownNow() в onDestroy гонит RejectedExecutionException
+                // в handler-поток — крэш приложения; глушим и не перепланируем.
+                if (destroyed) return
+                try {
+                    executor.execute {
+                        val p = manager
+                        if (phase == Phase.READY) {
+                            if (!p.isAlive()) {
+                                Log.w(TAG, "watchdog: proot мёртв — перезапуск")
                                 healthFailures.set(0)
-                                setState(Phase.STARTING, "watchdog: serve не отвечает — перезапуск")
-                                p.stop()
+                                setState(Phase.STARTING, "watchdog: перезапуск песочницы")
                                 bootSequence()
+                                return@execute
+                            }
+                            val code = try {
+                                HealthCheck.check(p.port, p.password)
+                            } catch (_: java.io.IOException) {
+                                -1
+                            }
+                            if (code == 200) {
+                                healthFailures.set(0)
+                                if (!healthy) {
+                                    healthy = true
+                                    pushToFlutter()
+                                }
+                            } else {
+                                val fails = healthFailures.incrementAndGet()
+                                Log.w(TAG, "watchdog: health=$code, подряд=$fails")
+                                if (fails >= 3) {
+                                    healthFailures.set(0)
+                                    setState(Phase.STARTING, "watchdog: serve не отвечает — перезапуск")
+                                    p.stop()
+                                    bootSequence()
+                                }
                             }
                         }
                     }
+                } catch (_: java.util.concurrent.RejectedExecutionException) {
+                    return
                 }
                 watchdogHandler.postDelayed(this, 10_000)
             }
@@ -343,6 +442,7 @@ class RuntimeService : Service() {
     }
 
     override fun onDestroy() {
+        destroyed = true
         watchdogHandler.removeCallbacksAndMessages(null)
         executor.shutdownNow()
         manager.stop()

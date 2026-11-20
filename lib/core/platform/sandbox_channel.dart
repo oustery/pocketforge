@@ -166,6 +166,16 @@ class SandboxChannel {
   /// Полный сброс содержимого песочницы.
   Future<void> reset() => _channel.invokeMethod<void>('reset');
 
+  /// Экспорт логов песочницы: нативная сторона собирает zip (boot/apk/serve/
+  /// proot-check + meta) и открывает системный share-шит. Возвращает путь.
+  Future<String?> exportLogs() async {
+    try {
+      return await _channel.invokeMethod<String>('exportLogs');
+    } on PlatformException {
+      return null;
+    }
+  }
+
   /// Команда внутри песочницы (M7 терминал): `/bin/sh -c [command]` через
   /// proot. Блокирующий вызов на нативной стороне, таймаут [timeoutMs].
   ///

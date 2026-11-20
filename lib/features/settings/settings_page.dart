@@ -6,7 +6,69 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
 
+import 'package:pocketforge/core/platform/sandbox_channel.dart';
 import 'package:pocketforge/features/update/update_service.dart';
+
+/// Экспорт логов песочницы (boot.log, apk.log, serve.log + meta) в zip
+/// через системный share-шит — для разбора ошибок запуска на устройстве.
+class LogsExportRow extends ConsumerStatefulWidget {
+  /// Создаёт строку.
+  const LogsExportRow({super.key});
+
+  @override
+  ConsumerState<LogsExportRow> createState() => _LogsExportRowState();
+}
+
+class _LogsExportRowState extends ConsumerState<LogsExportRow> {
+  bool _busy = false;
+  String? _status;
+  String? _error;
+
+  Future<void> _export() async {
+    setState(() {
+      _busy = true;
+      _status = null;
+      _error = null;
+    });
+    try {
+      final path = await ref.read(sandboxChannelProvider).exportLogs();
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _status = path == null
+            ? 'Экспорт недоступен на этом устройстве'
+            : 'Логи собраны, откроется окно отправки: ${Uri.file(path).pathSegments.last}';
+      });
+    } on Exception catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _error = e.toString();
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return ListTile(
+      leading: _busy
+          ? const SizedBox(
+              width: 18,
+              height: 18,
+              child: CircularProgressIndicator(strokeWidth: 2),
+            )
+          : const Icon(Icons.folder_zip_outlined),
+      title: const Text('Экспорт логов'),
+      subtitle: Text(
+        _error != null
+            ? 'Ошибка: $_error'
+            : (_status ?? 'boot/apk/serve — одним zip через системное окно'),
+      ),
+      onTap: _busy ? null : _export,
+    );
+  }
+}
 
 /// Провайдер UpdateService.
 final updateServiceProvider = Provider<UpdateService>((_) => UpdateService());
@@ -27,6 +89,7 @@ class SettingsPage extends StatelessWidget {
             title: Text('Песочница'),
             subtitle: Text('Управление — на главном экране (M1)'),
           ),
+          const LogsExportRow(),
           const ListTile(
             leading: Icon(Icons.key_outlined),
             title: Text('Авторизация провайдеров'),

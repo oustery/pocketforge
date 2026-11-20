@@ -65,6 +65,18 @@ class MainActivity : FlutterActivity() {
                         }
                     }
                 }
+                "exportLogs" -> {
+                    execExecutor.execute {
+                        try {
+                            val path = exportLogsZip()
+                            mainHandler.post { result.success(path) }
+                        } catch (e: Exception) {
+                            mainHandler.post {
+                                result.error("export_failed", e.message ?: "ошибка экспорта логов", null)
+                            }
+                        }
+                    }
+                }
                 else -> result.notImplemented()
             }
         }
@@ -100,6 +112,47 @@ class MainActivity : FlutterActivity() {
 
     private fun appVersionName(): String =
         packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
+
+    /// Экспорт всех логов песочницы одним zip: boot/apk/serve/proot-check +
+    /// снимок состояния (версия, ABI, свободная память) — открывает
+    /// системный share-шит, путь возвращается в Dart.
+    private fun exportLogsZip(): String {
+        val logs = File(com.example.pocketforge.sandbox.SandboxPaths.logs(this).absolutePath)
+        val cache = File(cacheDir, "export")
+        cache.mkdirs()
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+            .format(java.util.Date())
+        val zip = File(cache, "pocketforge-logs-$stamp.zip")
+
+        val meta = buildString {
+            append("version: ${appVersionName()}\n")
+            append("sdk: ${Build.VERSION.SDK_INT}\n")
+            append("abi: ${Build.SUPPORTED_ABIS.joinToString(",")}\n")
+            append("mem: ${java.lang.Runtime.getRuntime().freeMemory()}/${java.lang.Runtime.getRuntime().maxMemory()}\n")
+        }
+        java.util.zip.ZipOutputStream(java.io.FileOutputStream(zip)).use { zos ->
+            zos.putNextEntry(java.util.zip.ZipEntry("meta.txt"))
+            zos.write(meta.toByteArray())
+            zos.closeEntry()
+            if (logs.isDirectory) {
+                logs.listFiles()?.forEach { f ->
+                    if (f.isFile) {
+                        zos.putNextEntry(java.util.zip.ZipEntry("logs/${f.name}"))
+                        f.inputStream().use { it.copyTo(zos) }
+                        zos.closeEntry()
+                    }
+                }
+            }
+        }
+
+        val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", zip)
+        val send = Intent(Intent.ACTION_SEND)
+            .setType("application/zip")
+            .putExtra(Intent.EXTRA_STREAM, uri)
+            .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        startActivity(Intent.createChooser(send, "Логи PocketForge"))
+        return zip.absolutePath
+    }
 
     /// Установка APK: FileProvider URI + ACTION_VIEW (REQUEST_INSTALL_PACKAGES
     /// объявлен в манифесте; при отсутствии права открываем настройки).

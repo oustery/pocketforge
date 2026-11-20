@@ -23,6 +23,7 @@ class RootfsInstaller(private val ctx: Context) {
     }
 
     val opencodeVersion: String get() = artifacts.getJSONObject("opencode").getString("version")
+    val rootfsVersion: String get() = artifacts.getJSONObject("rootfs").getString("version")
     val apkPackages: List<String>
         get() = artifacts.getJSONArray("apkPackages").let { arr ->
             (0 until arr.length()).map { arr.getString(it) }
@@ -51,7 +52,10 @@ class RootfsInstaller(private val ctx: Context) {
         return missing
     }
 
-    fun ensureRootfs(onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
+    fun ensureRootfs(
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+        shouldStop: () -> Boolean = { false },
+    ): File {
         val rootfs = SandboxPaths.rootfs(ctx)
         val marker = File(rootfs, ".pf-rootfs-version")
         val wanted = artifacts.getJSONObject("rootfs").getString("version")
@@ -71,6 +75,7 @@ class RootfsInstaller(private val ctx: Context) {
             dest = File(SandboxPaths.artifacts(ctx), "rootfs-$wanted.tar.gz"),
             expectedSha256 = rootfsCfg.getString("sha256"),
             onProgress = onProgress,
+            shouldStop = shouldStop,
         )
         TarExtractor.extract(tar, rootfs)
         tar.delete()
@@ -88,7 +93,11 @@ class RootfsInstaller(private val ctx: Context) {
         return rootfs
     }
 
-    fun ensureOpencode(rootfs: File, onProgress: (Long, Long) -> Unit = { _, _ -> }): File {
+    fun ensureOpencode(
+        rootfs: File,
+        onProgress: (Long, Long) -> Unit = { _, _ -> },
+        shouldStop: () -> Boolean = { false },
+    ): File {
         val oc = artifacts.getJSONObject("opencode")
         val marker = File(rootfs, "usr/local/bin/.pf-opencode-version")
         val binary = File(rootfs, oc.getString("installPath").removePrefix("/"))
@@ -100,6 +109,7 @@ class RootfsInstaller(private val ctx: Context) {
             dest = File(SandboxPaths.artifacts(ctx), "opencode-${oc.getString("version")}-arm64.tar.gz"),
             expectedSha256 = oc.getString("sha256"),
             onProgress = onProgress,
+            shouldStop = shouldStop,
         )
         TarExtractor.extract(tar, SandboxPaths.artifacts(ctx))
         // tar содержит ./opencode

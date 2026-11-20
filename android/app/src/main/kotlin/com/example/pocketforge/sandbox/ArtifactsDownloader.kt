@@ -16,11 +16,15 @@ object ArtifactsDownloader {
 
     class ChecksumMismatchException(message: String) : IOException(message)
 
+    /// Не-ретраиBLE ошибка (HTTP 404/403 и т.п. — повторы бессмысленны).
+    class FatalDownloadException(message: String) : IOException(message)
+
     fun download(
         url: String,
         dest: File,
         expectedSha256: String,
         onProgress: (bytes: Long, total: Long) -> Unit = { _, _ -> },
+        shouldStop: () -> Boolean = { false },
     ): File {
         dest.parentFile?.mkdirs()
         val part = File(dest.parentFile, dest.name + ".part")
@@ -30,6 +34,7 @@ object ArtifactsDownloader {
 
         var attempt = 0
         while (true) {
+            if (shouldStop()) throw IOException("Загрузка остановлена")
             attempt++
             try {
                 val code = downloadOnce(url, part, onProgress)
@@ -51,7 +56,10 @@ object ArtifactsDownloader {
                 return promote(part, dest)
             } catch (e: ChecksumMismatchException) {
                 throw e
+            } catch (e: FatalDownloadException) {
+                throw e
             } catch (e: IOException) {
+                if (shouldStop()) throw IOException("Загрузка остановлена", e)
                 if (attempt >= 5) throw e
                 try {
                     Thread.sleep(2000L * attempt)
@@ -87,6 +95,11 @@ object ArtifactsDownloader {
         when {
             code == 206 -> resumed(conn, dest, already, onProgress)
             code == 200 -> fresh(conn, dest, onProgress)
+            code == 416 -> Unit // решает вызывающий (проверка .part)
+            code in 400..499 -> throw FatalDownloadException(
+                "HTTP $code для $url (не ретраится)",
+            )
+            else -> throw IOException("HTTP $code для $url")
         }
         conn.disconnect()
         return code
@@ -128,6 +141,11 @@ object ArtifactsDownloader {
                     out.write(buf, 0, n)
                     written += n
                     if (total > 0) onProgress(written, total)
+                }
+                // Обрыв докачки: без проверки .part уходит в sha256 и молча
+                // перезакачивается с нуля (теряется смысл Range).
+                if (total > 0 && written != total) {
+                    throw IOException("Обрыв докачки: $written из $total")
                 }
             }
         }
