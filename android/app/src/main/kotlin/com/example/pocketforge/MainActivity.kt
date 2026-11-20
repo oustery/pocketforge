@@ -28,6 +28,10 @@ class MainActivity : FlutterActivity() {
         channel.setMethodCallHandler { call, result ->
             when (call.method) {
                 "status" -> result.success(RuntimeService.currentStateMap())
+                "connectionPassword" -> {
+                    val port = call.argument<Int>("port")
+                    result.success(port?.let { RuntimeService.connectionPassword(it) })
+                }
                 "start" -> {
                     val intent = Intent(this, RuntimeService::class.java)
                         .setAction(RuntimeService.ACTION_START)

@@ -1,14 +1,11 @@
 import 'dart:async';
 
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:pocketforge/core/api/opencode_client.dart';
-
 import 'package:pocketforge/features/auth/token_store.dart';
 
 /// Провайдер из ответа GET /provider/auth.
 class AuthMethodChoice {
-
   /// Создаёт вариант метода.
   const AuthMethodChoice({
     required this.index,
@@ -16,11 +13,9 @@ class AuthMethodChoice {
     required this.label,
     this.prompts = const [],
   });
+
   /// Парсит метод из map.
-  factory AuthMethodChoice.fromMap(
-    int index,
-    Map<String, Object?> m,
-  ) {
+  factory AuthMethodChoice.fromMap(int index, Map<String, Object?> m) {
     final prompts = <AuthPrompt>[];
     final raw = m['prompts'];
     if (raw is List) {
@@ -43,7 +38,6 @@ class AuthMethodChoice {
       prompts: prompts,
     );
   }
-
 
   /// Индекс метода (для authorize/callback).
   final int index;
@@ -141,16 +135,19 @@ class AuthState {
 }
 
 /// Провайдер клиента opencode для авторизации (переопределяется в тестах).
-final authClientProvider =
-    Provider<OpenCodeClient>((_) => throw UnimplementedError());
+final authClientProvider = Provider<OpenCodeClient>(
+  (_) => throw UnimplementedError(),
+);
 
 /// Провайдер хранилища токенов (переопределяется в тестах).
-final tokenStoreProvider =
-    Provider<TokenStore>((_) => throw UnimplementedError());
+final tokenStoreProvider = Provider<TokenStore>(
+  (_) => throw UnimplementedError(),
+);
 
 /// Контроллер авторизации: провайдер → методы → authorize → callback.
 class AuthController extends AsyncNotifier<AuthState> {
   Timer? _poll;
+  int _methodIndex = 0;
 
   @override
   Future<AuthState> build() async {
@@ -195,14 +192,16 @@ class AuthController extends AsyncNotifier<AuthState> {
     Map<String, String>? inputs,
   }) async {
     final client = ref.read(authClientProvider);
+    final methods = state.value?.methods ?? const <AuthMethodChoice>[];
+    state = AsyncValue<AuthState>.data(
+      AuthState(phase: AuthUiPhase.methodsLoading, methods: methods),
+    );
     try {
       final auth = await client.providerOauthAuthorize(
         providerID: providerID,
-        body: {
-          'method': methodIndex,
-          'inputs': ?inputs,
-        },
+        body: {'method': methodIndex, 'inputs': ?inputs},
       );
+      _methodIndex = methodIndex;
       state = AsyncValue<AuthState>.data(
         AuthState(
           phase: auth.method == 'code'
@@ -228,7 +227,7 @@ class AuthController extends AsyncNotifier<AuthState> {
       providerID,
       () => client.providerOauthCallback(
         providerID: providerID,
-        body: {'method': _currentMethodIndex(), 'code': code},
+        body: {'method': _methodIndex, 'code': code},
       ),
     );
   }
@@ -247,10 +246,8 @@ class AuthController extends AsyncNotifier<AuthState> {
           'type': 'oauth',
           'refresh': '',
           'access': accessToken,
-          'expires': DateTime.now()
-                  .toUtc()
-                  .millisecondsSinceEpoch ~/
-              1000 +
+          'expires':
+              DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000 +
               3600 * 24 * 30,
           'accountId': 'device-flow',
         },
@@ -277,9 +274,7 @@ class AuthController extends AsyncNotifier<AuthState> {
       await client.authRemove(providerID: providerID);
       await ref.read(tokenStoreProvider).delete(providerID);
       state = const AsyncValue<AuthState>.data(
-        AuthState(
-          phase: AuthUiPhase.done,
-        ),
+        AuthState(phase: AuthUiPhase.done),
       );
     } on Exception catch (e) {
       state = AsyncValue<AuthState>.data(
@@ -288,15 +283,21 @@ class AuthController extends AsyncNotifier<AuthState> {
     }
   }
 
-  int _currentMethodIndex() {
-    final methods = state.value?.methods ?? const <AuthMethodChoice>[];
-    final oauth = methods.where((m) => m.type == 'oauth').toList();
-    return oauth.isNotEmpty ? oauth.first.index : 0;
+  /// Завершает браузерный вход, при котором не требуется ввод кода.
+  Future<void> finishInBrowser(String providerID) async {
+    final client = ref.read(authClientProvider);
+    await _finish(
+      providerID,
+      () => client.providerOauthCallback(
+        providerID: providerID,
+        body: {'method': _methodIndex},
+      ),
+    );
   }
 
   Future<void> _finish(
     String providerID,
-    Future<Object?> Function() action,
+    Future<bool> Function() action,
   ) async {
     try {
       state = AsyncValue<AuthState>.data(
@@ -305,12 +306,11 @@ class AuthController extends AsyncNotifier<AuthState> {
           methods: state.value?.methods ?? const [],
         ),
       );
-      await action();
+      if (!await action()) {
+        throw const FormatException('Провайдер не подтвердил вход');
+      }
       state = AsyncValue<AuthState>.data(
-        AuthState(
-          phase: AuthUiPhase.done,
-          authenticatedProvider: providerID,
-        ),
+        AuthState(phase: AuthUiPhase.done, authenticatedProvider: providerID),
       );
     } on Exception catch (e) {
       state = AsyncValue<AuthState>.data(
@@ -321,5 +321,6 @@ class AuthController extends AsyncNotifier<AuthState> {
 }
 
 /// Провайдер контроллера авторизации.
-final authControllerProvider =
-    AsyncNotifierProvider<AuthController, AuthState>(AuthController.new);
+final authControllerProvider = AsyncNotifierProvider<AuthController, AuthState>(
+  AuthController.new,
+);

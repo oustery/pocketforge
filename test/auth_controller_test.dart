@@ -50,7 +50,7 @@ class ScriptedAdapter implements HttpClientAdapter {
         'instructions': 'Откройте ссылку, подтвердите и вставьте код',
       };
     } else if (path == '/provider/anthropic/oauth/callback' ||
-        path == '/auth/anthropic') {
+        path.startsWith('/auth/')) {
       body = true;
     }
     return ResponseBody.fromString(

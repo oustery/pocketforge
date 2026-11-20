@@ -3,13 +3,22 @@ import 'dart:async';
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/chat/chat_controller.dart';
 import 'package:pocketforge/features/chat/chat_models.dart';
+import 'package:pocketforge/features/git/git_controller.dart';
 
 /// Чат MVP: стрим сообщений, Abort, Permission/Question-карточки, markdown.
 class ChatPage extends ConsumerWidget {
   /// Создаёт страницу чата для [sessionID] (или активной).
-  const ChatPage({required this.sessionID, super.key});
+  const ChatPage({
+    required this.sessionID,
+    required this.onNewSession,
+    super.key,
+  });
+
+  /// Создаёт сессию из списка чатов.
+  final VoidCallback? onNewSession;
 
   /// Идентификатор сессии.
   final String sessionID;
@@ -18,81 +27,95 @@ class ChatPage extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final chat = ref.watch(chatControllerProvider(sessionID));
     final ctrl = ref.read(chatControllerProvider(sessionID).notifier);
-    final sessions = ref.watch(sessionsProvider);
-
+    final active = ref
+        .watch(sessionsProvider)
+        .value
+        ?.sessions
+        .where((session) => session.id == sessionID)
+        .firstOrNull;
+    final title = active?.title.trim();
     return Scaffold(
       appBar: AppBar(
-        title: Text('Чат', style: Theme.of(context).textTheme.titleMedium),
+        title: Text(title == null || title.isEmpty ? 'Чат' : title),
         actions: [
+          IconButton(
+            icon: const Icon(Icons.history_rounded),
+            tooltip: 'Список чатов',
+            onPressed: () => showModalBottomSheet<void>(
+              context: context,
+              builder: (_) => _SessionsSheet(current: sessionID),
+            ),
+          ),
           IconButton(
             icon: const Icon(Icons.add_comment_outlined),
             tooltip: 'Новый чат',
-            onPressed: () {
-              unawaited(
-                ref.read(sessionsProvider.notifier).newSession(),
-              );
-            },
+            onPressed: onNewSession,
           ),
         ],
       ),
-      drawer: _SessionsDrawer(current: sessionID),
-      body: Column(
-        children: [
-          Expanded(
-            child: chat.when(
-              loading: () => const Center(child: CircularProgressIndicator()),
-              error: (e, _) => Center(child: Text('Ошибка: $e')),
-              data: (state) => _MessageList(state: state, sessionID: sessionID),
-            ),
-          ),
-          _Composer(sessionID: sessionID, ctrl: ctrl),
-        ],
-      ),
-      bottomNavigationBar: sessions.value?.error != null
-          ? SafeArea(
-              child: Text(
-                'Песочница не запущена: ${sessions.value!.error}',
-                textAlign: TextAlign.center,
-                style: Theme.of(context).textTheme.bodySmall,
+      body: SafeArea(
+        child: ForgeFrame(
+          child: Column(
+            children: [
+              Expanded(
+                child: chat.when(
+                  loading: () =>
+                      const Center(child: CircularProgressIndicator()),
+                  error: (_, _) => ForgeNotice(
+                    icon: Icons.error_outline,
+                    title: 'Не удалось открыть чат',
+                    description: 'Повторите загрузку сообщений.',
+                    error: true,
+                    action: OutlinedButton(
+                      onPressed: () =>
+                          ref.invalidate(chatControllerProvider(sessionID)),
+                      child: const Text('Повторить'),
+                    ),
+                  ),
+                  data: (state) =>
+                      _MessageList(state: state, sessionID: sessionID),
+                ),
               ),
-            )
-          : null,
+              if (chat.asData != null)
+                _Composer(sessionID: sessionID, ctrl: ctrl),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
 
-class _SessionsDrawer extends ConsumerWidget {
-  const _SessionsDrawer({required this.current});
+class _SessionsSheet extends ConsumerWidget {
+  const _SessionsSheet({required this.current});
 
   final String current;
 
   @override
   Widget build(BuildContext context, WidgetRef ref) {
-    final sessions = ref.watch(sessionsProvider);
-    return Drawer(
-      child: sessions.when(
-        loading: () => const Center(child: CircularProgressIndicator()),
-        error: (e, _) => Center(child: Text('Ошибка: $e')),
-        data: (s) => ListView(
-          padding: EdgeInsets.zero,
-          children: [
-            const DrawerHeader(child: Text('Сессии')),
-            for (final sess in s.sessions)
+    final sessions = ref.watch(sessionsProvider).value?.sessions;
+    return SafeArea(
+      child: ListView(
+        shrinkWrap: true,
+        padding: const EdgeInsets.fromLTRB(16, 0, 16, 16),
+        children: [
+          const ForgeSectionTitle('Чаты'),
+          if (sessions != null)
+            for (final session in sessions)
               ListTile(
-                leading: Icon(
-                  sess.id == current
-                      ? Icons.chat_bubble
-                      : Icons.chat_bubble_outline,
+                selected: session.id == current,
+                leading: const Icon(Icons.chat_bubble_outline_rounded),
+                title: Text(
+                  session.title.isEmpty ? 'Чат без названия' : session.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
                 ),
-                title: Text(sess.title, maxLines: 1),
-                subtitle: Text(sess.id, maxLines: 1),
                 onTap: () {
-                  ref.read(sessionsProvider.notifier).select(sess.id);
+                  ref.read(sessionsProvider.notifier).select(session.id);
                   Navigator.of(context).pop();
                 },
               ),
-          ],
-        ),
+        ],
       ),
     );
   }
@@ -106,34 +129,48 @@ class _MessageList extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-      children: [
-        for (final m in state.messages) _MessageBubble(message: m),
-        if (state.error != null) _ErrorBanner(text: state.error!),
-        if (state.streaming)
-          const Padding(
-            padding: EdgeInsets.all(12),
-            child: Align(
-              alignment: Alignment.centerLeft,
-              child: SizedBox(
-                width: 22,
-                height: 22,
-                child: CircularProgressIndicator(strokeWidth: 2.5),
-              ),
+    if (state.messages.isEmpty &&
+        state.error == null &&
+        !state.streaming &&
+        state.permissions.isEmpty &&
+        state.questions.isEmpty) {
+      return const ForgeNotice(
+        icon: Icons.code_rounded,
+        title: 'С какой задачи начнём?',
+        description: 'Опишите задачу и укажите нужные файлы или каталог.',
+      );
+    }
+    final items = <Widget>[
+      for (final m in state.messages)
+        _MessageBubble(key: ValueKey(m.id), message: m),
+      if (state.error != null) _ErrorBanner(text: state.error!),
+      if (state.streaming)
+        const Padding(
+          padding: EdgeInsets.all(12),
+          child: Align(
+            alignment: Alignment.centerLeft,
+            child: SizedBox(
+              width: 22,
+              height: 22,
+              child: CircularProgressIndicator(strokeWidth: 2.5),
             ),
           ),
-        for (final p in state.permissions)
-          _PermissionCard(permission: p, sessionID: sessionID),
-        for (final q in state.questions)
-          _QuestionCard(question: q, sessionID: sessionID),
-      ],
+        ),
+      for (final p in state.permissions)
+        _PermissionCard(permission: p, sessionID: sessionID),
+      for (final q in state.questions)
+        _QuestionCard(question: q, sessionID: sessionID),
+    ];
+    return ListView(
+      reverse: true,
+      padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
+      children: items.reversed.toList(),
     );
   }
 }
 
 class _MessageBubble extends StatelessWidget {
-  const _MessageBubble({required this.message});
+  const _MessageBubble({required this.message, super.key});
 
   final ChatMessageView message;
 
@@ -165,7 +202,14 @@ class _MessageBubble extends StatelessWidget {
         ),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
-          children: [for (final p in visible) _PartView(part: p)],
+          children: [
+            Text(
+              isUser ? 'Вы' : 'OpenCode',
+              style: Theme.of(context).textTheme.labelMedium,
+            ),
+            const SizedBox(height: 4),
+            for (final p in visible) _PartView(part: p),
+          ],
         ),
       ),
     );
@@ -187,9 +231,9 @@ class _PartView extends StatelessWidget {
           selectable: true,
           styleSheet: MarkdownStyleSheet(
             p: Theme.of(context).textTheme.bodyMedium,
-            code: Theme.of(context).textTheme.bodySmall?.copyWith(
-                  fontFamily: 'monospace',
-                ),
+            code: Theme.of(
+              context,
+            ).textTheme.bodySmall?.copyWith(fontFamily: 'monospace'),
           ),
         );
       case 'reasoning':
@@ -243,8 +287,8 @@ class _ReasoningTileState extends State<_ReasoningTile> {
                 Text(
                   'Размышления',
                   style: Theme.of(context).textTheme.labelMedium?.copyWith(
-                        color: Theme.of(context).colorScheme.primary,
-                      ),
+                    color: Theme.of(context).colorScheme.primary,
+                  ),
                 ),
               ],
             ),
@@ -287,8 +331,7 @@ class _ToolCard extends StatelessWidget {
       decoration: BoxDecoration(
         color: Theme.of(context).colorScheme.surface,
         borderRadius: BorderRadius.circular(10),
-        border:
-            Border.all(color: Theme.of(context).colorScheme.outlineVariant),
+        border: Border.all(color: Theme.of(context).colorScheme.outlineVariant),
       ),
       child: Row(
         children: [
@@ -304,7 +347,7 @@ class _ToolCard extends StatelessWidget {
               size: 16,
               color: failed
                   ? Theme.of(context).colorScheme.error
-                  : Colors.green.shade600,
+                  : Theme.of(context).colorScheme.primary,
             ),
           const SizedBox(width: 8),
           Expanded(
@@ -349,8 +392,8 @@ class _ErrorBanner extends StatelessWidget {
             child: Text(
               text,
               style: Theme.of(context).textTheme.bodySmall?.copyWith(
-                    color: Theme.of(context).colorScheme.onErrorContainer,
-                  ),
+                color: Theme.of(context).colorScheme.onErrorContainer,
+              ),
             ),
           ),
         ],
@@ -360,10 +403,7 @@ class _ErrorBanner extends StatelessWidget {
 }
 
 class _PermissionCard extends ConsumerWidget {
-  const _PermissionCard({
-    required this.permission,
-    required this.sessionID,
-  });
+  const _PermissionCard({required this.permission, required this.sessionID});
 
   final Map<String, Object?> permission;
   final String sessionID;
@@ -406,8 +446,10 @@ class _PermissionCard extends ConsumerWidget {
             ),
             if (patterns.isNotEmpty) ...[
               const SizedBox(height: 4),
-              Text(patterns.join(', '),
-                  style: Theme.of(context).textTheme.bodySmall),
+              Text(
+                patterns.join(', '),
+                style: Theme.of(context).textTheme.bodySmall,
+              ),
             ],
             const SizedBox(height: 8),
             Wrap(
@@ -415,11 +457,11 @@ class _PermissionCard extends ConsumerWidget {
               children: [
                 FilledButton(
                   onPressed: id == null ? null : () => reply('once'),
-                  child: const Text('Разрешить'),
+                  child: const Text('Разрешить один раз'),
                 ),
                 OutlinedButton(
                   onPressed: id == null ? null : () => reply('always'),
-                  child: const Text('Всегда'),
+                  child: const Text('Разрешать всегда'),
                 ),
                 OutlinedButton(
                   onPressed: id == null ? null : () => reply('reject'),
@@ -435,10 +477,7 @@ class _PermissionCard extends ConsumerWidget {
 }
 
 class _QuestionCard extends ConsumerWidget {
-  const _QuestionCard({
-    required this.question,
-    required this.sessionID,
-  });
+  const _QuestionCard({required this.question, required this.sessionID});
 
   final Map<String, Object?> question;
   final String sessionID;
@@ -448,9 +487,9 @@ class _QuestionCard extends ConsumerWidget {
     final id = (question['id'] ?? question['requestID']) as String?;
     final questions =
         (question['questions'] as List?)
-                ?.cast<Map<String, Object?>>()
-                .toList() ??
-            const <Map<String, Object?>>[];
+            ?.cast<Map<String, Object?>>()
+            .toList() ??
+        const <Map<String, Object?>>[];
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
@@ -463,26 +502,24 @@ class _QuestionCard extends ConsumerWidget {
                 style: Theme.of(context).textTheme.titleSmall,
               ),
               const SizedBox(height: 8),
-              for (final opt in (q['options'] as List?)
-              ?.cast<Map<String, Object?>>()
-              .whereType<Map<String, Object?>>()
-              .toList() ?? const <Map<String, Object?>>[])
+              for (final opt
+                  in (q['options'] as List?)
+                          ?.cast<Map<String, Object?>>()
+                          .whereType<Map<String, Object?>>()
+                          .toList() ??
+                      const <Map<String, Object?>>[])
                 ListTile(
                   dense: true,
                   leading: const Icon(Icons.radio_button_unchecked, size: 18),
-                  title: Text(
-                    (opt['label'] ?? opt['value'] ?? '') as String,
-                  ),
+                  title: Text((opt['label'] ?? opt['value'] ?? '') as String),
                   onTap: () {
                     if (id == null) return;
                     unawaited(
                       ref
-                          .read(
-                            chatControllerProvider(sessionID).notifier,
-                          )
+                          .read(chatControllerProvider(sessionID).notifier)
                           .replyQuestion(id, [
-                        [(opt['label'] ?? opt['value'] ?? '') as String],
-                      ]),
+                            [(opt['label'] ?? opt['value'] ?? '') as String],
+                          ]),
                     );
                   },
                 ),
@@ -491,8 +528,8 @@ class _QuestionCard extends ConsumerWidget {
               onPressed: id == null
                   ? null
                   : () => ref
-                      .read(chatControllerProvider(sessionID).notifier)
-                      .rejectQuestion(id),
+                        .read(chatControllerProvider(sessionID).notifier)
+                        .rejectQuestion(id),
               child: const Text('Отклонить'),
             ),
           ],
@@ -526,62 +563,92 @@ class _ComposerState extends ConsumerState<_Composer> {
   Widget build(BuildContext context) {
     final chat = ref.watch(chatControllerProvider(widget.sessionID));
     final streaming = chat.value?.streaming ?? false;
-    return SafeArea(
-      child: Padding(
-        padding: const EdgeInsets.fromLTRB(8, 4, 8, 8),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.end,
-          children: [
-            Expanded(
-              child: TextField(
-                controller: _text,
-                minLines: 1,
-                maxLines: 5,
-                decoration: InputDecoration(
-                  hintText: 'Сообщение…',
-                  filled: true,
-                  border: OutlineInputBorder(
-                    borderRadius: BorderRadius.circular(24),
-                    borderSide: BorderSide.none,
-                  ),
-                  contentPadding: const EdgeInsets.symmetric(
-                    horizontal: 16,
-                    vertical: 10,
-                  ),
-                ),
-                onSubmitted: (_) {
-                  unawaited(_send());
-                },
+    final draft = ref.watch(pendingGitActionProvider);
+    return Material(
+      color: Theme.of(context).colorScheme.surfaceContainerLow,
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Divider(height: 1),
+          if (draft != null)
+            ListTile(
+              leading: const Icon(Icons.account_tree_outlined),
+              title: const Text('Черновик из Git'),
+              subtitle: const Text('Вставьте, проверьте и отправьте вручную.'),
+              onTap: () {
+                final existing = _text.text;
+                final value = existing.trim().isEmpty
+                    ? draft
+                    : '$existing\n\n$draft';
+                _text.value = TextEditingValue(
+                  text: value,
+                  selection: TextSelection.collapsed(offset: value.length),
+                );
+                ref.read(pendingGitActionProvider.notifier).submit(null);
+              },
+              trailing: IconButton(
+                tooltip: 'Удалить черновик Git',
+                icon: const Icon(Icons.close_rounded),
+                onPressed: () =>
+                    ref.read(pendingGitActionProvider.notifier).submit(null),
               ),
             ),
-            const SizedBox(width: 8),
-            if (streaming) IconButton.filled(
-                    onPressed: () => widget.ctrl.interrupt(),
-                    icon: const Icon(Icons.stop),
-                    tooltip: 'Прервать (Abort)',
-                  ) else IconButton.filled(
-                    onPressed: _sending ? null : _send,
-                    icon: const Icon(Icons.send),
-                    tooltip: 'Отправить',
+          Padding(
+            padding: const EdgeInsets.fromLTRB(16, 8, 12, 10),
+            child: Row(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Expanded(
+                  child: TextField(
+                    controller: _text,
+                    enabled: !_sending,
+                    minLines: 1,
+                    maxLines: 4,
+                    decoration: const InputDecoration(
+                      hintText: 'Сообщение OpenCode',
+                      isDense: true,
+                    ),
                   ),
-          ],
-        ),
+                ),
+                const SizedBox(width: 8),
+                if (streaming)
+                  IconButton.filledTonal(
+                    onPressed: () => widget.ctrl.interrupt(),
+                    icon: const Icon(Icons.stop_rounded),
+                    tooltip: 'Прервать ответ',
+                  )
+                else
+                  ListenableBuilder(
+                    listenable: _text,
+                    builder: (context, _) => IconButton.filled(
+                      onPressed: _sending || _text.text.trim().isEmpty
+                          ? null
+                          : _send,
+                      icon: const Icon(Icons.arrow_upward_rounded),
+                      tooltip: 'Отправить',
+                    ),
+                  ),
+              ],
+            ),
+          ),
+        ],
       ),
     );
   }
 
   Future<void> _send() async {
     final text = _text.text.trim();
-    if (text.isEmpty) return;
+    if (_sending || text.isEmpty) return;
     setState(() => _sending = true);
     try {
       await widget.ctrl.send(text);
-      _text.clear();
+      if (mounted) _text.clear();
     } on Exception catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Не удалось отправить: $e')),
-        );
+        ScaffoldMessenger.of(
+          context,
+        ).showSnackBar(SnackBar(content: Text('Не удалось отправить: $e')));
       }
     } finally {
       if (mounted) setState(() => _sending = false);
