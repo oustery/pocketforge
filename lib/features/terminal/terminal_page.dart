@@ -8,7 +8,7 @@ import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
 import 'package:pocketforge/features/terminal/terminal_controller.dart';
 
-/// Команды внутри Alpine Linux и история вывода текущего терминала.
+/// Команды внутри Debian Linux и история вывода текущего терминала.
 class TerminalPage extends ConsumerStatefulWidget {
   /// Создаёт страницу терминала.
   const TerminalPage({super.key});
@@ -137,7 +137,7 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
                         color: colors.primary,
                       ),
                       Text(
-                        ready ? 'Alpine Linux · /root' : 'Песочница недоступна',
+                        ready ? 'Debian Linux · /root' : 'Песочница недоступна',
                         style: Theme.of(context).textTheme.labelLarge,
                       ),
                       if (!ready)
@@ -177,7 +177,7 @@ class _TerminalPageState extends ConsumerState<TerminalPage> {
                         icon: Icons.terminal_rounded,
                         title: ready ? 'Терминал готов' : 'Нужна песочница',
                         description: ready
-                            ? 'Команды выполняются в Alpine Linux. '
+                            ? 'Команды выполняются в Debian Linux. '
                                   'Вывод и код завершения появятся здесь.'
                             : 'Запустите песочницу в обзоре.',
                         action: ready

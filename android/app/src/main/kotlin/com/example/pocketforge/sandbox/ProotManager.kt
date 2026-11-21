@@ -24,10 +24,11 @@ class ProotManager(private val ctx: Context) {
     }
 
     /// [serveStrategy] — полный префикс запуска opencode: пустой (прямой
-    /// exec), «/lib/ld-musl-aarch64.so.1 » (явный загрузчик) или с env-присваиваниями
-    /// («BUN_JSC_useJIT=0 /lib/ld-musl-aarch64.so.1 ») — выбирается пробами
-    /// detectExecMode; на ROM с нестандартным ядром прямой exec динамических
-    /// бинарей умирает молча, а другой путь/окружение работает.
+    /// exec), «/lib/ld-linux-aarch64.so.1 » (явный загрузчик) или с
+    /// env-присваиваниями («BUN_JSC_useJIT=0 /lib/ld-linux-aarch64.so.1 ») —
+    /// выбирается пробами detectExecMode; на ROM с нестандартным ядром
+    /// прямой exec динамических бинарей умирает молча, а другой
+    /// путь/окружение работает.
     fun startServe(logFile: File, serveStrategy: String = "") {
         val rootfs = SandboxPaths.rootfs(ctx)
         val workspace = SandboxPaths.workspace(ctx)
@@ -48,7 +49,7 @@ class ProotManager(private val ctx: Context) {
             "-w", "/root",
             "/bin/sh", "-c",
             // pf-serve-boot в логе ДОКАЗЫВАЕТ, что sh внутри proot выполнился;
-            // 2>&1 гарантирует, что ошибки ld-musl/opencode попадут в serve.log.
+            // 2>&1 гарантирует, что ошибки загрузчика/opencode попадут в serve.log.
             // exec-строка валидна и с env-присваиваниями в стратегии (POSIX sh).
             "echo pf-serve-boot && cd /root && exec ${serveStrategy}/usr/local/bin/opencode " +
                 "serve --port $port --print-logs --log-level INFO 2>&1",
@@ -76,8 +77,8 @@ class ProotManager(private val ctx: Context) {
         Log.i(TAG, "proot запущен, порт=$port")
     }
 
-    /// Разовая команда внутри песочницы (bootstrap apk-пакетов, preflight).
-    /// [timeoutMs] обязателен: без него зависший apk (мертвая сеть) вечно
+    /// Разовая команда внутри песочницы (bootstrap apt-пакетов, preflight).
+    /// [timeoutMs] обязателен: без него зависший apt-get (мертвая сеть) вечно
     /// держал бы boot-фазу — watchdog на не-READY не работает.
     /// [verbose] включает PROOT_VERBOSE-печать proot («exited with status N» /
     /// «terminated with signal N») — без неё молчаливая смерть гостя

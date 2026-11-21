@@ -35,7 +35,7 @@ class RuntimePage extends ConsumerWidget {
               Text('Рабочая среда', style: theme.textTheme.headlineLarge),
               const SizedBox(height: 8),
               Text(
-                'OpenCode и Alpine Linux на вашем устройстве.',
+                'OpenCode и Debian Linux на вашем устройстве.',
                 style: TextStyle(color: theme.colorScheme.onSurfaceVariant),
               ),
               const SizedBox(height: 24),
@@ -135,9 +135,9 @@ class _RuntimeCardState extends ConsumerState<_RuntimeCard> {
     final active = state.preparing || phase == SandboxPhase.ready;
     final title = switch (phase) {
       SandboxPhase.uninitialized => 'Песочница не настроена',
-      SandboxPhase.installingRootfs => 'Распаковываем Alpine Linux',
+      SandboxPhase.installingRootfs => 'Распаковываем Debian Linux',
       SandboxPhase.downloadingOpencode => 'Загружаем OpenCode',
-      SandboxPhase.bootstrappingApk => 'Устанавливаем пакеты',
+      SandboxPhase.bootstrappingPackages => 'Устанавливаем пакеты',
       SandboxPhase.starting => 'Запускаем OpenCode',
       SandboxPhase.ready when state.isReady => 'Песочница готова',
       SandboxPhase.ready => 'Проверяем подключение',
@@ -173,7 +173,7 @@ class _RuntimeCardState extends ConsumerState<_RuntimeCard> {
             Text(switch (phase) {
               SandboxPhase.uninitialized =>
                 'Для первого запуска нужен интернет. '
-                    'Понадобится около 115 МБ трафика и 2 ГБ свободного места.',
+                    'Понадобится около 140 МБ трафика и 2 ГБ свободного места.',
               SandboxPhase.ready when state.isReady =>
                 'Откройте чат или выберите '
                     'инструмент на нижней панели.',

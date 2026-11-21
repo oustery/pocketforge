@@ -32,7 +32,7 @@ void main() {
       const phases = {
         'installing_rootfs': SandboxPhase.installingRootfs,
         'downloading_opencode': SandboxPhase.downloadingOpencode,
-        'bootstrapping_apk': SandboxPhase.bootstrappingApk,
+        'bootstrapping_packages': SandboxPhase.bootstrappingPackages,
         'starting': SandboxPhase.starting,
       };
       for (final entry in phases.entries) {

@@ -1,5 +1,5 @@
 name: pocketforge
-description: "PocketForge — локальный OpenCode-агент на Android: proot-песочница с Alpine + opencode serve, чат, git, файлы."
+description: "PocketForge — локальный OpenCode-агент на Android: proot-песочница с Debian + opencode serve, чат, git, файлы."
 publish_to: "none"
 version: 0.3.9+13
 
