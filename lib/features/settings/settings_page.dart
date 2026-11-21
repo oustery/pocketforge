@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
@@ -173,11 +174,21 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
     try {
       final svc = ref.read(updateServiceProvider);
       var path = _downloadedPath;
+      // Файл из кеша перепроверяем по sha256 из манифеста: битый или
+      // обрезанный APK — источник ошибки установщика «пакет недействителен».
+      if (path != null && res.apkSha256 != null) {
+        final cached = File(path);
+        final ok = cached.existsSync() &&
+            sha256.convert(await cached.readAsBytes()).toString() ==
+                res.apkSha256!.toLowerCase();
+        if (!ok) path = null;
+      }
       if (path == null || !File(path).existsSync()) {
         final dir = await getUpdatesDir();
         path = await svc.downloadApk(
           res.apkUrl,
           dir: dir,
+          expectedSha256: res.apkSha256,
           onProgress: (received, _) {
             if (mounted) setState(() => _received = received);
           },

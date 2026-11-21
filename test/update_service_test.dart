@@ -1,6 +1,7 @@
 import 'dart:convert';
 import 'dart:io';
 
+import 'package:crypto/crypto.dart';
 import 'package:dio/dio.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -118,6 +119,65 @@ void main() {
       final f = File(path);
       expect(f.existsSync(), isTrue);
       expect(f.lengthSync(), 1024);
+    });
+
+    test('checkForUpdate: apkSha256 из манифеста нормализуется', () async {
+      final svc = service(UpdateAdapter({
+        'version': '1.2.0',
+        'apkUrl': 'https://x.example/pf-1.2.0.apk',
+        'apkSha256': 'ABCDEF0123',
+        'notes': '',
+      }));
+      final r = await svc.checkForUpdate(currentVersion: '1.1.5');
+      expect(r.apkSha256, 'abcdef0123');
+    });
+
+    test('checkForUpdate: без apkSha256 — null (проверка не выполняется)',
+        () async {
+      final svc = service(UpdateAdapter({
+        'version': '1.2.0',
+        'apkUrl': 'https://x.example/pf-1.2.0.apk',
+        'notes': '',
+      }));
+      final r = await svc.checkForUpdate(currentVersion: '1.1.5');
+      expect(r.apkSha256, isNull);
+    });
+
+    test('downloadApk: sha256 совпал — файл принимается', () async {
+      final svc = service(UpdateAdapter({
+        'version': '1.0.0',
+        'apkUrl': 'https://x.example/app/pf-test.apk',
+        'notes': '',
+      }));
+      final dir = await Directory.systemTemp.createTemp('pf_update_test');
+      addTearDown(() => dir.delete(recursive: true));
+      final expected =
+          sha256.convert(List<int>.generate(1024, (i) => i % 256)).toString();
+      final path = await svc.downloadApk(
+        'https://x.example/app/pf-test.apk',
+        dir: dir,
+        expectedSha256: expected,
+      );
+      expect(File(path).lengthSync(), 1024);
+    });
+
+    test('downloadApk: битый sha256 — повторная попытка и исключение',
+        () async {
+      final svc = service(UpdateAdapter({
+        'version': '1.0.0',
+        'apkUrl': 'https://x.example/app/pf-test.apk',
+        'notes': '',
+      }));
+      final dir = await Directory.systemTemp.createTemp('pf_update_test');
+      addTearDown(() => dir.delete(recursive: true));
+      await expectLater(
+        svc.downloadApk(
+          'https://x.example/app/pf-test.apk',
+          dir: dir,
+          expectedSha256: '00' * 32,
+        ),
+        throwsException,
+      );
     });
 
     test('currentVersion без платформы — unknown', () async {

@@ -1,5 +1,6 @@
 {
   "version": "0.3.9",
   "apkUrl": "https://github.com/oustery/pocketforge/releases/latest/download/pocketforge-v0.3.9-arm64.apk",
+  "apkSha256": "0732e91076a06f7b8e7a594df9d362a4bdac577186df7a7b465efe8390fdab01",
   "notes": "Диагностика отказа opencode: verbose-пробы proot (статус/сигнал смерти гостя), факты free/df/ls/md5-библиотек малыми чтениями, матрица стратегий запуска (прямой/ld-musl/без JIT) — живая стратегия поднимает serve без ремонта; md5-верификация бинаря при каждом boot; ремонт без повторного bootstrap"
 }
