@@ -3,10 +3,10 @@
 ## Контекст проекта
 
 Flutter-приложение Android (arm64-v8a only, minSdk 26, **targetSdk 28**),
-внутри которого крутится песочница: proot + Alpine (aarch64) + opencode
-serve (musl-arm64). Распространение через GitHub Releases, targetSdk 28 —
-осознанное решение (обход FGS/scoped-storage ограничений новых API;
-см. docs/этап 2, вопрос Q2 заказчика).
+внутри которого крутится песочница: proot + Debian 13 (trixie, aarch64,
+usrmerge) + opencode serve (glibc-arm64). Распространение через GitHub
+Releases, targetSdk 28 — осознанное решение (обход FGS/scoped-storage
+ограничений новых API; см. docs/этап 2, вопрос Q2 заказчика).
 
 ## Команды
 
@@ -31,7 +31,7 @@ python3 scripts/gen_api_client.py api/openapi-1.19.6.json   # регенерац
   (runtime, auth, chat, git, files, terminal, settings, update).
 - `android/app/src/main/kotlin/com/example/pocketforge/sandbox/` — нативный
   runtime: RuntimeService, ProotManager, RootfsInstaller, ArtifactsDownloader.
-- `assets/` — artifacts.json (пин версий + sha256), rootfs tarball.
+- `android/app/src/main/assets/` — artifacts.json (пин версий + sha256).
 - `android/app/src/main/jniLibs/arm64-v8a/libproot.so` — proot 5.3.0 static.
 
 ## Правила

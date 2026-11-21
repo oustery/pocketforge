@@ -8,14 +8,14 @@ enum SandboxPhase {
   /// Песочница не инициализирована (после полного сброса).
   uninitialized,
 
-  /// Скачивание и распаковка Alpine rootfs (по манифесту артефактов).
+  /// Скачивание и распаковка Debian rootfs (по манифесту артефактов).
   installingRootfs,
 
-  /// Скачивание бинарника opencode (arm64-musl).
+  /// Скачивание бинарника opencode (arm64).
   downloadingOpencode,
 
-  /// Первый `apk add` внутри песочницы.
-  bootstrappingApk,
+  /// Первый `apt-get install` внутри песочницы.
+  bootstrappingPackages,
 
   /// Запуск proot + opencode serve, ожидание healthcheck.
   starting,
@@ -91,7 +91,7 @@ class SandboxState {
   bool get preparing => switch (phase) {
     SandboxPhase.installingRootfs ||
     SandboxPhase.downloadingOpencode ||
-    SandboxPhase.bootstrappingApk ||
+    SandboxPhase.bootstrappingPackages ||
     SandboxPhase.starting => true,
     _ => false,
   };
@@ -185,7 +185,7 @@ class SandboxChannel {
   /// Полный сброс содержимого песочницы.
   Future<void> reset() => _channel.invokeMethod<void>('reset');
 
-  /// Экспорт логов песочницы: нативная сторона собирает zip (boot/apk/serve/
+  /// Экспорт логов песочницы: нативная сторона собирает zip (boot/apt/serve/
   /// proot-check + meta) и открывает системный share-шит. Возвращает путь.
   Future<String?> exportLogs() async {
     try {

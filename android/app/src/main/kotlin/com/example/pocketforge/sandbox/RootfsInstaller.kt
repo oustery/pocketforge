@@ -24,31 +24,26 @@ class RootfsInstaller(private val ctx: Context) {
 
     val opencodeVersion: String get() = artifacts.getJSONObject("opencode").getString("version")
     val rootfsVersion: String get() = artifacts.getJSONObject("rootfs").getString("version")
-    val apkPackages: List<String>
-        get() = artifacts.getJSONArray("apkPackages").let { arr ->
+    val packages: List<String>
+        get() = artifacts.getJSONArray("packages").let { arr ->
             (0 until arr.length()).map { arr.getString(it) }
         }
 
     /// Критические для запуска proot пути rootfs: без симлинка /bin/sh
     /// proot не может execve и умирает молча с кодом 255 (реальный случай
     /// на устройстве). Возвращает список отсутствующих частей.
-    /// ВАЖНО: bin/sh — абсолютный симлинк (/bin/sh → /bin/busybox), он
-    /// «битый» снаружи rootfs (резолвится к корню Android, где /bin/busybox
-    /// нет), поэтому проверяем наличие ССЫЛКИ без резолва цели — иначе
-    /// ensureRootfs переустанавливал бы rootfs при каждом запуске.
+    /// bin/sh — путь через usrmerge-симлинки Debian (/bin → /usr/bin,
+    /// /usr/bin/sh → dash), поэтому проверяем резолв по существованию,
+    /// не наличие записи в tar — запись bin/sh в Debian-архиве нет.
     private fun brokenRootfsParts(rootfs: File): List<String> {
         val missing = mutableListOf<String>()
-        val sh = File(rootfs, "bin/sh")
-        val shOk = try {
-            java.nio.file.Files.isSymbolicLink(java.nio.file.Paths.get(sh.absolutePath)) || sh.exists()
-        } catch (_: Exception) {
-            sh.exists()
+        if (!File(rootfs, "bin/sh").exists()) missing += "bin/sh"
+        val apt = File(rootfs, "usr/bin/apt-get")
+        if (!apt.exists() || !apt.canExecute()) missing += "usr/bin/apt-get(x)"
+        if (!File(rootfs, "usr/bin/dpkg").exists()) missing += "usr/bin/dpkg"
+        if (!File(rootfs, "lib/ld-linux-aarch64.so.1").exists()) {
+            missing += "lib/ld-linux-aarch64.so.1"
         }
-        if (!shOk) missing += "bin/sh"
-        val busybox = File(rootfs, "bin/busybox")
-        if (!busybox.exists() || !busybox.canExecute()) missing += "bin/busybox(x)"
-        if (!File(rootfs, "sbin/apk").exists()) missing += "sbin/apk"
-        if (!File(rootfs, "lib/ld-musl-aarch64.so.1").exists()) missing += "lib/ld-musl-aarch64.so.1"
         return missing
     }
 
@@ -68,7 +63,8 @@ class RootfsInstaller(private val ctx: Context) {
         rootfs.deleteRecursively()
         rootfs.mkdirs()
         // rootfs не бандлим в APK (AGP ненадёжно пакует tar.gz в assets) —
-        // скачиваем с Alpine CDN и проверяем sha256, как и opencode
+        // скачиваем Debian-слой OCI-образа (debuerreotype, URL закреплён
+        // коммитом) и проверяем sha256, как и opencode
         val rootfsCfg = artifacts.getJSONObject("rootfs")
         val tar = ArtifactsDownloader.download(
             url = rootfsCfg.getString("url"),
@@ -105,7 +101,7 @@ class RootfsInstaller(private val ctx: Context) {
         if (!force && marker.exists() && marker.readText().trim() == oc.getString("version") && binary.exists()) {
             // Верифицируем и кешированный по маркеру файл: обрыв записи в
             // прошлом boot иначе переживает все проверки (реальный случай 0.3.8:
-            // битый бинарь жил под маркером и ронял ld-musl «symbol not found»).
+            // битый бинарь жил под маркером и ронял загрузчик «symbol not found»).
             val wantMd5 = oc.getJSONObject("binary").optString("md5", "")
             if (wantMd5.isEmpty() || md5(binary).equals(wantMd5, ignoreCase = true)) {
                 return binary
@@ -181,7 +177,7 @@ class RootfsInstaller(private val ctx: Context) {
 
     /// DNS внутри песочницы. Android не предоставляет /etc/resolv.conf, а
     /// публичные резолверы (8.8.8.8/1.1.1.1) операторы часто блокируют — тогда
-    /// apk внутри proot не резолвит хосты («нет сети»), хотя Android-сторона
+    /// apt внутри proot не резолвит хосты («нет сети»), хотя Android-сторона
     /// качается нормально: системный резолвер ходит через DNS оператора.
     /// Поэтому сначала DNS оператора (LinkProperties), затем публичные фолбэки.
     /// Вызывается на каждый запуск: DNS меняется при переключении Wi-Fi/сети.
@@ -213,17 +209,23 @@ class RootfsInstaller(private val ctx: Context) {
         emptyList()
     }
 
-    /// Страховка: если в minirootfs нет /etc/apk/repositories, apk не откроет
-    /// репозитории и bootstrap упадёт. Восстанавливаем по ветке из URL rootfs.
+    /// Страховка: если в rootfs нет apt-источников (debian.sources /
+    /// sources.list), apt-get update не сможет ничего скачать. Debian rootfs
+    /// (debuerreotype) несёт sources.list.d/debian.sources — пишем свой
+    /// список только если обоих нет; кодовое имя берём из URL rootfs.
     fun ensureRepositories(rootfs: File) {
-        val f = File(rootfs, "etc/apk/repositories")
-        if (f.exists() && f.length() > 0) return
+        val builtin = File(rootfs, "etc/apt/sources.list.d/debian.sources")
+        if (builtin.exists() && builtin.length() > 0) return
+        val legacy = File(rootfs, "etc/apt/sources.list")
+        if (legacy.exists() && legacy.length() > 0) return
         val url = artifacts.getJSONObject("rootfs").getString("url")
-        val branch = Regex("/alpine/(v[0-9.]+)/").find(url)?.groupValues?.get(1) ?: "v3.24"
+        val codename = Regex("/(trixie|bookworm|bullseye)/").find(url)?.groupValues?.get(1) ?: "trixie"
+        val f = File(rootfs, "etc/apt/sources.list.d/pocketforge.list")
         f.parentFile?.mkdirs()
         f.writeText(
-            "https://dl-cdn.alpinelinux.org/alpine/$branch/main\n" +
-                "https://dl-cdn.alpinelinux.org/alpine/$branch/community\n",
+            "deb http://deb.debian.org/debian $codename main\n" +
+                "deb http://deb.debian.org/debian $codename-updates main\n" +
+                "deb http://deb.debian.org/debian-security $codename-security main\n",
         )
     }
 }

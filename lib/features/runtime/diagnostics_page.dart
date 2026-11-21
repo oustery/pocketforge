@@ -145,7 +145,7 @@ class _DiagnosticsPageState extends ConsumerState<DiagnosticsPage> {
   }
 }
 
-/// Экспорт логов песочницы (boot.log, apk.log, serve.log + meta) в zip
+/// Экспорт логов песочницы (boot.log, apt.log, serve.log + meta) в zip
 /// через системный share-шит — для разбора ошибок запуска на устройстве.
 class _LogsExportRow extends ConsumerStatefulWidget {
   /// Создаёт строку.

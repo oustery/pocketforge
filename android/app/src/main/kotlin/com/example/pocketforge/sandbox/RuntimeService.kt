@@ -16,7 +16,7 @@ import java.io.IOException
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicInteger
 
-enum class Phase { UNINITIALIZED, INSTALLING_ROOTFS, DOWNLOADING_OPENCODE, BOOTSTRAPPING_APK, STARTING, READY, STOPPED, ERROR }
+enum class Phase { UNINITIALIZED, INSTALLING_ROOTFS, DOWNLOADING_OPENCODE, BOOTSTRAPPING_PACKAGES, STARTING, READY, STOPPED, ERROR }
 
 /// Foreground-сервис: держит proot+opencode живым, watchdog перезапускает
 /// песочницу после kill'ов (в т.ч. phantom process killer на Android 12+).
@@ -28,9 +28,11 @@ class RuntimeService : Service() {
         private const val NOTIFICATION_ID = 1
         const val ACTION_START = "com.example.pocketforge.sandbox.START"
 
-        /// Явный динамический загрузчик musl: обход молчаливого отказа
+        /// Явный динамический загрузчик glibc: обход молчаливого отказа
         /// execve динамических бинарей под proot (см. detectExecMode).
-        const val MUSL_LOADER = "/lib/ld-musl-aarch64.so.1"
+        /// В Debian путь /lib/ld-linux-aarch64.so.1 резолвится через
+        /// usrmerge-симлинк /lib → /usr/lib.
+        const val GLIBC_LOADER = "/lib/ld-linux-aarch64.so.1"
         const val ACTION_STOP = "com.example.pocketforge.sandbox.STOP"
         const val ACTION_RESET = "com.example.pocketforge.sandbox.RESET"
 
@@ -68,14 +70,14 @@ class RuntimeService : Service() {
         fun currentStateMap(): Map<String, Any?> = synchronized(stateLock) {
             val svc = serviceInstance
             // В панели лога показываем и загрузочный лог: до READY serve.log
-            // пуст, а именно тогда падает установка — apk.log обязан быть виден.
+            // пуст, а именно тогда падает установка — apt.log обязан быть виден.
             val logTail = svc?.let {
-                val apkTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apk.log"), 4096).trim()
+                val aptTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apt.log"), 4096).trim()
                 val serveTail = HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log"), 4096).trim()
                 val bootTail = SandboxLogger.tail(2048).trim()
                 buildString {
                     if (bootTail.isNotEmpty()) append("── boot.log ──\n$bootTail\n")
-                    if (apkTail.isNotEmpty()) append("\n── apk.log ──\n$apkTail\n")
+                    if (aptTail.isNotEmpty()) append("\n── apt.log ──\n$aptTail\n")
                     if (serveTail.isNotEmpty()) append("\n── serve.log ──\n$serveTail")
                 }
             } ?: ""
@@ -196,7 +198,7 @@ class RuntimeService : Service() {
                 stopRequested = false
                 if (phase == Phase.READY || phase == Phase.STARTING ||
                     phase == Phase.INSTALLING_ROOTFS || phase == Phase.DOWNLOADING_OPENCODE ||
-                    phase == Phase.BOOTSTRAPPING_APK
+                    phase == Phase.BOOTSTRAPPING_PACKAGES
                 ) {
                     // уже запускается/работает
                 } else {
@@ -209,29 +211,28 @@ class RuntimeService : Service() {
     }
 
     // Режим исполнения внутри proot (определяется пробами на каждый boot):
-    // на устройстве пользователя прямой exec динамических бинарей (apk,
+    // на устройстве пользователя прямой exec динамических бинарей (apt-get,
     // opencode — у обоих NEEDED помимо libc) умирает молча с 255 при пустом
-    // выводе, тогда как busybox (единственный NEEDED — интерпретатор-симлинк
-    // libc.musl→ld-musl) и sh работают. Явный запуск через загрузчик
-    // (/lib/ld-musl-aarch64.so.1 <bin>) — другой execve-путь; если он даёт
-    // код 0, serve и apk получают соответствующий префикс.
-    private var muslApkPrefix: String = ""
+    // выводе, тогда как sh и статические бинари работают. Явный запуск через
+    // загрузчик (/lib/ld-linux-aarch64.so.1 <bin>) — другой execve-путь;
+    // если он даёт код 0, serve и apt-get получают соответствующий префикс.
+    private var pkgPrefix: String = ""
 
     /// Полная стратегия запуска opencode для serve: пусто (прямой exec),
-    /// «/lib/ld-musl-aarch64.so.1 » (явный загрузчик) или env+загрузчик
-    /// («BUN_JSC_useJIT=0 /lib/ld-musl-aarch64.so.1 »). Выбирается пробами;
+    /// «/lib/ld-linux-aarch64.so.1 » (явный загрузчик) или env+загрузчик
+    /// («BUN_JSC_useJIT=0 /lib/ld-linux-aarch64.so.1 »). Выбирается пробами;
     /// на устройстве с ROM-спецификой прямой exec тяжёлых бинарей умирает
     /// молча, а другой путь/окружение жив.
     private var serveStrategy: String = ""
 
     /// native bootstrap уже отработал в ЭТОМ boot — ремонт не повторяет его.
-    private var apkBootstrapDoneThisBoot = false
+    private var pkgBootstrapDoneThisBoot = false
     private var echoCode = -1
     private var shCode = -1
-    private var apkDirectCode = -1
-    private var apkMuslCode = -1
+    private var aptDirectCode = -1
+    private var aptLoaderCode = -1
     private var ocDirectCode = -1
-    private var ocMuslCode = -1
+    private var ocLoaderCode = -1
 
     private fun bootSequence() {
         val t0 = System.currentTimeMillis()
@@ -240,11 +241,11 @@ class RuntimeService : Service() {
             SandboxLogger.i("=== boot: старт (v0.3.8) ===")
 
             checkStop()
-            setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs")
+            setState(Phase.INSTALLING_ROOTFS, "Распаковка Debian rootfs")
             val rootfs = installer.ensureRootfs(
                 { bytes, total ->
                     if (total > 0) {
-                        setState(Phase.INSTALLING_ROOTFS, "Распаковка Alpine rootfs", bytes / total.toDouble())
+                        setState(Phase.INSTALLING_ROOTFS, "Распаковка Debian rootfs", bytes / total.toDouble())
                     }
                 },
                 { stopRequested },
@@ -253,7 +254,7 @@ class RuntimeService : Service() {
             val shOk = java.nio.file.Files.isSymbolicLink(sh.toPath()) || sh.exists()
             SandboxLogger.i(
                 "rootfs готов (${installer.rootfsVersion}, bin/sh=${shOk}, " +
-                    "busybox=${File(rootfs, "bin/busybox").exists()})",
+                    "apt-get=${File(rootfs, "usr/bin/apt-get").exists()})",
             )
 
             checkStop()
@@ -281,21 +282,21 @@ class RuntimeService : Service() {
             checkStop()
             detectExecMode(rootfs)
 
-            val apkMarker = File(rootfs, ".pf-apk-bootstrap")
-            if (!apkMarker.exists()) {
-                bootstrapApkPackages(rootfs)
-                apkMarker.writeText(installer.opencodeVersion)
-                SandboxLogger.i("apk-маркер поставлен")
+            val pkgMarker = File(rootfs, ".pf-pkg-bootstrap")
+            if (!pkgMarker.exists()) {
+                bootstrapPackages(rootfs)
+                pkgMarker.writeText(installer.opencodeVersion)
+                SandboxLogger.i("маркер пакетов поставлен")
             } else {
-                SandboxLogger.i("apk-пакеты уже установлены (маркер есть)")
+                SandboxLogger.i("пакеты уже установлены (маркер есть)")
             }
-            apkBootstrapDoneThisBoot = true
+            pkgBootstrapDoneThisBoot = true
 
             // opencode не исполняется ни одной пробой — ремонт: переустановка
             // бинаря и библиотек и повторная матрица проб. Если diagOpenCode
             // нашла живую стратегию (например, без JIT) — serve заведётся
             // без ремонта.
-            if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isEmpty()) {
+            if (ocDirectCode != 0 && ocLoaderCode != 0 && serveStrategy.isEmpty()) {
                 repairAndRecheck(rootfs)
             }
             verifyToolchain(rootfs)
@@ -368,53 +369,53 @@ class RuntimeService : Service() {
         setState(Phase.STARTING, "Проверка режима исполнения песочницы")
         echoCode = probe("echo", "/bin/echo pf-proot-ok")
         shCode = probe("sh", "/bin/sh -c 'echo pf-sh-ok'")
-        apkDirectCode = probe("apk-direct", "/sbin/apk --version")
-        apkMuslCode = probe("apk-ldmusl", "/lib/ld-musl-aarch64.so.1 /sbin/apk --version")
+        aptDirectCode = probe("apt-direct", "/usr/bin/apt-get --version")
+        aptLoaderCode = probe("apt-loader", "$GLIBC_LOADER /usr/bin/apt-get --version")
         ocDirectCode = probe("opencode-direct", "/usr/local/bin/opencode --version")
-        ocMuslCode = probe("opencode-ldmusl", "/lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version")
+        ocLoaderCode = probe("opencode-loader", "$GLIBC_LOADER /usr/local/bin/opencode --version")
 
         serveStrategy =
-            if (ocDirectCode == 0) "" else if (ocMuslCode == 0) MUSL_LOADER + " " else ""
-        muslApkPrefix =
-            if (apkDirectCode == 0) "" else if (apkMuslCode == 0) MUSL_LOADER + " " else ""
+            if (ocDirectCode == 0) "" else if (ocLoaderCode == 0) GLIBC_LOADER + " " else ""
+        pkgPrefix =
+            if (aptDirectCode == 0) "" else if (aptLoaderCode == 0) GLIBC_LOADER + " " else ""
         SandboxLogger.i(
             "режим исполнения: serve-стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}', " +
-                "apk-префикс='${muslApkPrefix.trim().ifEmpty { "прямой" }}'",
+                "apt-префикс='${pkgPrefix.trim().ifEmpty { "прямой" }}'",
         )
-        if (ocDirectCode != 0 && ocMuslCode != 0) {
+        if (ocDirectCode != 0 && ocLoaderCode != 0) {
             SandboxLogger.w(
-                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-musl ($ocMuslCode) — диагностика",
+                "opencode не исполняется ни напрямую ($ocDirectCode), ни через ld-linux ($ocLoaderCode) — диагностика",
             )
             diagOpenCode()
         }
-        if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isNotEmpty()) {
+        if (ocDirectCode != 0 && ocLoaderCode != 0 && serveStrategy.isNotEmpty()) {
             SandboxLogger.i(
                 "живая стратегия serve найдена: '${serveStrategy.trim()}' — ремонт не требуется",
             )
         }
     }
 
-    /// Диагностика отказа opencode: факты МАЛЫМИ чтениями (md5sum/ls на 219 МБ
+    /// Диагностика отказа opencode: факты МАЛЫМИ чтениями (md5sum/ls на 213 МБ
     /// на устройстве умирают молча — большие операции под proot ненадёжны),
     /// verbose-проба proot (печатает статус/сигнал смерти гостя) и матрица
     /// вариантов запуска: если какой-то жив — он становится serve-стратегией.
     private fun diagOpenCode() {
-        // Размеры на устройстве: opencode ~218963048 байт; libstdc++ — из пакета.
+        // Размеры на устройстве: opencode ~212651000 байт; libstdc++ — из пакета.
         probe(
             "diag-ls",
-            "ls -l /usr/local/bin/opencode /usr/local/bin/.pf-opencode-version /usr/lib/libstdc++.so.6*",
+            "ls -l /usr/local/bin/opencode /usr/local/bin/.pf-opencode-version /usr/lib/aarch64-linux-gnu/libstdc++.so.6*",
             20_000,
         )
-        // Память и диск: apk add/update и md5sum умирали молча — пусть будет факт.
+        // Память и диск: apt install и md5sum умирали молча — пусть будет факт.
         probe("diag-free-df", "free -m | head -3; df -h /root /tmp | head -4", 20_000)
-        // md5 МАЛОЙ библиотеки (2.8 МБ — живой объём): целость установленной либы.
-        probe("diag-md5-libstdc", "md5sum /usr/lib/libstdc++.so.6.0.34", 60_000)
+        // md5 МАЛОЙ библиотеки: целость установленной либы.
+        probe("diag-md5-libstdc", "md5sum /usr/lib/aarch64-linux-gnu/libstdc++.so.6.*", 60_000)
         // Внутренняя причина смерти гостя: proot печатает «exited with status N» /
         // «terminated with signal N» — различает exit(255) и сигнал (SIGBUS/SIGKILL).
         probeVerbose("opencode-verbose", "/usr/local/bin/opencode --version", 60_000)
         probeVerbose(
-            "opencode-verbose-ldmusl",
-            "/lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version",
+            "opencode-verbose-loader",
+            "$GLIBC_LOADER /usr/local/bin/opencode --version",
             60_000,
         )
         // Варианты окружения/загрузчика. BUN_JSC_useJIT=0 отключает JIT —
@@ -422,8 +423,8 @@ class RuntimeService : Service() {
         val variants = listOf(
             "opencode-nojit" to
                 "BUN_JSC_useJIT=0 BUN_JSC_useFTLJIT=0 /usr/local/bin/opencode --version",
-            "opencode-nojit-ldmusl" to
-                "BUN_JSC_useJIT=0 BUN_JSC_useFTLJIT=0 /lib/ld-musl-aarch64.so.1 /usr/local/bin/opencode --version",
+            "opencode-nojit-loader" to
+                "BUN_JSC_useJIT=0 BUN_JSC_useFTLJIT=0 $GLIBC_LOADER /usr/local/bin/opencode --version",
         )
         for ((name, cmd) in variants) {
             if (probe(name, cmd, 60_000) == 0) {
@@ -483,39 +484,37 @@ class RuntimeService : Service() {
     /// верификацией ПОСЛЕ записи на Android-стороне (RootfsInstaller).
     private fun repairAndRecheck(rootfs: File) {
         checkStop()
-        setState(Phase.BOOTSTRAPPING_APK, "Ремонт: переустановка opencode и библиотек")
+        setState(Phase.BOOTSTRAPPING_PACKAGES, "Ремонт: переустановка opencode и библиотек")
         SandboxLogger.w(
-            "repair: opencode не исполняется ни одной пробой ($ocDirectCode/$ocMuslCode) — " +
-                "переустанавливаю бинарь" + if (apkBootstrapDoneThisBoot) "" else " и apk-пакеты",
+            "repair: opencode не исполняется ни одной пробой ($ocDirectCode/$ocLoaderCode) — " +
+                "переустанавливаю бинарь" + if (pkgBootstrapDoneThisBoot) "" else " и пакеты",
         )
         val refMd5 = installer.opencodeBinaryMd5()
-        // Битые файлы: бинарь, его маркер, библиотеки libstdc++ (симлинк+файл).
+        // Битые файлы: бинарь и его маркер (переустановятся из манифеста);
+        // libstdc++ при необходимости перепишет apt-get install --reinstall.
         File(rootfs, "usr/local/bin/opencode").delete()
         File(rootfs, "usr/local/bin/.pf-opencode-version").delete()
-        File(rootfs, "usr/lib").listFiles()?.forEach { f ->
-            if (f.name.startsWith("libstdc++.so")) f.delete()
-        }
         installer.ensureOpencode(rootfs, force = true)
-        if (!apkBootstrapDoneThisBoot) {
+        if (!pkgBootstrapDoneThisBoot) {
             // Пакеты уже ставились в этом boot — повтор только тратит время.
-            NativeBootstrap(this).bootstrapPackages(rootfs, installer.apkPackages)
+            bootstrapPackages(rootfs, reinstall = true)
         }
         detectExecMode(rootfs)
-        if (ocDirectCode != 0 && ocMuslCode != 0 && serveStrategy.isEmpty()) {
+        if (ocDirectCode != 0 && ocLoaderCode != 0 && serveStrategy.isEmpty()) {
             verifyToolchain(rootfs)
             throw java.io.IOException(
-                "opencode не исполняется и после ремонта (direct=$ocDirectCode, ldmusl=$ocMuslCode, " +
-                    "стратегии: прямой/ldmusl/nojit; md5-эталон ${refMd5 ?: "?"}) — пришлите экспорт логов",
+                "opencode не исполняется и после ремонта (direct=$ocDirectCode, loader=$ocLoaderCode, " +
+                    "стратегии: прямой/loader/nojit; md5-эталон ${refMd5 ?: "?"}) — пришлите экспорт логов",
             )
         }
         SandboxLogger.i(
             "repair: opencode исполняется после переустановки " +
-                "(direct=$ocDirectCode, ldmusl=$ocMuslCode, стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}')",
+                "(direct=$ocDirectCode, loader=$ocLoaderCode, стратегия='${serveStrategy.trim().ifEmpty { "прямой" }}')",
         )
     }
 
     /// Верификация тулчейна: динамические бинари из пакетов должны стартовать —
-    /// это факт целости УСТАНОВЛЕННЫХ БИБЛИОТЕК (libgcc, libpcre и т.д.).
+    /// это факт целости УСТАНОВЛЕННЫХ БИБЛИОТЕК (libstdc++, libpcre2 и т.д.).
     private fun verifyToolchain(rootfs: File) {
         setState(Phase.STARTING, "Проверка инструментов песочницы")
         val rg = probe("rg", "/usr/bin/rg --version", 20_000)
@@ -530,9 +529,10 @@ class RuntimeService : Service() {
         }
     }
 
-    /// Установка apk-пакетов: apk внутри proot (с префиксом по пробам) либо
-    /// прямой bootstrap через Android-сеть (без исполнения под proot).
-    private fun bootstrapApkPackages(rootfs: File) {
+    /// Установка apt-пакетов: apt-get внутри proot (с префиксом по пробам).
+    /// [reinstall] — путь ремонта: --reinstall перезаписывает файлы уже
+    /// установленных пакетов (apt считает их нетронутыми и иначе пропустит).
+    private fun bootstrapPackages(rootfs: File, reinstall: Boolean = false) {
         if (echoCode != 0) {
             // sh внутри proot не исполняется — и serve не заведётся; fail fast.
             throw java.io.IOException(
@@ -540,23 +540,28 @@ class RuntimeService : Service() {
             )
         }
 
-        // apk --version мог быть 0, а apk add — умирать (реальный случай:
-        // 0.3.7 boot1 — две wasted попытки). Решает РЕАЛЬНАЯ проба: apk update
-        // требует сеть и запись — то же, что и apk add.
-        val apkUpdate = probe("apk-update", "${muslApkPrefix}apk update".trim(), 120_000)
-        if (apkUpdate == 0) {
-            val pkgs = installer.apkPackages.joinToString(" ")
-            val logFile = File(SandboxPaths.logs(this), "apk.log")
-            logFile.writeText("")
+        // apt-get --version мог быть 0, а install — умирать (в Alpine-эпоху
+        // apk add умирал после успешного apk --version: реальный случай
+        // 0.3.7 boot1). Решает РЕАЛЬНАЯ проба: apt-get update требует сеть
+        // и запись — то же, что и install.
+        val aptUpdate = probe("apt-update", "${pkgPrefix}apt-get update".trim(), 120_000)
+        val pkgs = installer.packages.joinToString(" ")
+        val logFile = File(SandboxPaths.logs(this), "apt.log")
+        logFile.writeText("")
+        if (aptUpdate == 0) {
             for (attempt in 1..2) {
                 checkStop()
-                setState(Phase.BOOTSTRAPPING_APK, "Установка: apk add $pkgs (попытка $attempt из 2)")
+                setState(
+                    Phase.BOOTSTRAPPING_PACKAGES,
+                    "Установка: apt-get install $pkgs (попытка $attempt из 2)",
+                )
                 val code = manager.runOnce(
-                    "${muslApkPrefix}apk add --no-cache $pkgs",
+                    "DEBIAN_FRONTEND=noninteractive ${pkgPrefix}apt-get install -y" +
+                        "${if (reinstall) " --reinstall" else ""} --no-install-recommends $pkgs",
                     logFile,
                     600_000,
                 )
-                SandboxLogger.i("apk add попытка $attempt: код $code")
+                SandboxLogger.i("apt-get install попытка $attempt: код $code")
                 if (code == 0) return
                 if (attempt == 1) {
                     try {
@@ -567,25 +572,16 @@ class RuntimeService : Service() {
                     }
                 }
             }
-            val tail = HealthCheck.tail(logFile, 600).trim()
-            SandboxLogger.w("apk-путь не удался, переключаюсь на прямой bootstrap; apk.log: $tail")
         } else {
             SandboxLogger.w(
-                "apk update не исполняется в proot (код $apkUpdate, direct=$apkDirectCode, ldmusl=$apkMuslCode) — прямой bootstrap",
+                "apt-get update не исполняется в proot (код $aptUpdate, " +
+                    "direct=$aptDirectCode, loader=$aptLoaderCode) — установку не начинаю",
             )
         }
-
-        // Прямой bootstrap: скачивание через Android-стек, распаковка в rootfs.
-        setState(Phase.BOOTSTRAPPING_APK, "Установка пакетов через сеть Android (без proot)")
-        val nb = NativeBootstrap(this) { pkg, done, total ->
-            val pct = if (total > 0) done * 100 / total else -1
-            setState(
-                Phase.BOOTSTRAPPING_APK,
-                "Установка пакетов: $pkg (${pct.takeIf { it >= 0 } ?: "…"}%)",
-            )
-        }
-        nb.bootstrapPackages(rootfs, installer.apkPackages)
-        SandboxLogger.i("прямой bootstrap завершён")
+        val tail = HealthCheck.tail(logFile, 600).trim()
+        throw java.io.IOException(
+            "apt-установка пакетов не удалась (update=$aptUpdate); apt.log: $tail",
+        )
     }
 
     private fun startWatchdog() {

@@ -38,8 +38,9 @@ class GitOverview {
 /// - ветки/история — чтение `.git` через file API (HEAD, refs,
 ///   packed-refs, logs/HEAD);
 /// - мутации (clone/pull/push/checkout) — через git-агента в сессии чата
-///   (pty-эндпоинт opencode требует node-pty/glibc и недоступен в
-///   musl-песочнице, поэтому exec-команд в API нет).
+///   (pty-эндпоинт opencode тянет node-pty под libc песочницы: в Alpine/musl
+///   он был недоступен; на Debian ограничение снялось бы, но путь не
+///   проверен, поэтому exec-команд в API нет).
 class GitService {
   /// Создаёт сервис. [workDir] — репозиторий внутри песочницы.
   GitService(this.client, {this.workDir = '/root/project'});

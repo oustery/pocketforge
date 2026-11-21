@@ -1,7 +1,7 @@
 # PocketForge
 
 Локальный OpenCode-агент для Android: приложение Flutter упаковывает
-proot-песочницу (Alpine Linux aarch64 + opencode serve) и даёт мобильный
+proot-песочницу (Debian Linux aarch64 + opencode serve) и даёт мобильный
 интерфейс — чат, файлы, терминал, git.
 
 ## Системные требования
@@ -12,7 +12,7 @@ proot-песочницу (Alpine Linux aarch64 + opencode serve) и даёт м�
 | Android | 8.0+ (minSdk 26), targetSdk 28 |
 | RAM устройства | ≥ 4 ГБ |
 | Диск | ≥ 2 ГБ свободно (rootfs + workspace + пакеты) |
-| Сеть при первом запуске | Wi-Fi (~115 МБ: opencode + apk-пакеты) |
+| Сеть при первом запуске | Wi-Fi (~140 МБ: opencode + Debian rootfs + apt-пакеты) |
 | Распространение | GitHub Releases + in-app update (Play не используется) |
 
 ## Сборка
@@ -39,10 +39,13 @@ fvm flutter build apk --release --target-platform android-arm64
 
 ## Архитектура (кратко)
 
-- **Песочница**: proot 5.3.0 (static, aarch64) как `libproot.so` + Alpine
-  minirootfs 3.24.4 и opencode 1.19.6 (musl-arm64; оба скачиваются при первом
-  запуске, sha256 из `assets/artifacts.json`). Serve на `127.0.0.1:<random>`,
-  Basic-пароль 128 бит на запуск.
+- **Песочница**: proot 5.3.0 (static, aarch64) как `libproot.so` + Debian
+  13 (trixie) slim rootfs (arm64v8, debuerreotype; OCI-слой tar.gz с URL,
+  закреплённым коммитом) и opencode 1.19.6 (glibc-arm64; оба скачиваются
+  при первом запуске, sha256 из `android/app/src/main/assets/artifacts.json`).
+  Serve на `127.0.0.1:<random>`, Basic-пароль 128 бит на запуск. Пакеты
+  (git, ripgrep, curl, ca-certificates, bash, libstdc++6) ставятся
+  `apt-get` внутри proot при первом буте.
 - **Runtime**: Kotlin-сервис `RuntimeService` (foreground service, wake lock,
   watchdog). Dart — через MethodChannel `pocketforge/sandbox`.
 - **API-клиент**: генерируется из живой спецификации сервера `/doc`

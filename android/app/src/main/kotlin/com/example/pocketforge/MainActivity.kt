@@ -117,7 +117,7 @@ class MainActivity : FlutterActivity() {
     private fun appVersionName(): String =
         packageManager.getPackageInfo(packageName, 0).versionName ?: "unknown"
 
-    /// Экспорт всех логов песочницы одним zip: boot/apk/serve/proot-check +
+    /// Экспорт всех логов песочницы одним zip: boot/apt/serve/proot-check +
     /// снимок состояния (версия, ABI, свободная память) — открывает
     /// системный share-шит, путь возвращается в Dart.
     private fun exportLogsZip(): String {

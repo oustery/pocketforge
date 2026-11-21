@@ -1,22 +1,22 @@
 {
   "opencode": {
     "version": "1.19.6",
-    "url": "https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-arm64-musl.tar.gz",
-    "sha256": "45407388777dfc1894591c9727c169f202ad92c75757038950630a0fbb12ca97",
-    "sizeBytes": 78461019,
+    "url": "https://github.com/anomalyco/opencode/releases/download/v1.19.6/opencode-linux-arm64.tar.gz",
+    "sha256": "5b68c1f4c5e75b4134e664cc8f36d634d64208d4fcfe5bcf3b48bab699c2dbac",
+    "sizeBytes": 78729407,
     "tarEntry": "opencode",
     "installPath": "/usr/local/bin/opencode",
     "binary": {
-      "size": 218963048,
-      "md5": "a5cd98132453eb5749411ca6c4d6667a"
+      "size": 212651000,
+      "md5": "d7b99cd4f7ae4cfa47bcc5f741602d54"
     }
   },
   "rootfs": {
-    "distribution": "alpine",
-    "version": "3.24.4",
+    "distribution": "debian",
+    "version": "13.7",
     "arch": "aarch64",
-    "sha256": "4b14c18f7e90a063b61462ea1462a5732c154bf6adad594974fe6487cd98a8de",
-    "url": "https://dl-cdn.alpinelinux.org/alpine/v3.24/releases/aarch64/alpine-minirootfs-3.24.4-aarch64.tar.gz"
+    "sha256": "247b26a4519187bec80e4b91bfca39d2882f58e608b9ac5a8d753f860823fad8",
+    "url": "https://raw.githubusercontent.com/debuerreotype/docker-debian-artifacts/5994ab615f09f401eef80676e152b497e2a7b3ba/trixie/slim/oci/blobs/rootfs.tar.gz"
   },
   "proot": {
     "version": "5.3.0",
@@ -24,13 +24,13 @@
     "sha256": "fa10b1a7818c2f5b1dcb5834450570c368c9ecf66d31521509621b95c4538a45",
     "jniLib": "libproot.so"
   },
-  "apkPackages": [
-    "git",
+  "packages": [
     "bash",
+    "git",
     "ripgrep",
     "curl",
     "ca-certificates",
-    "libstdc++"
+    "libstdc++6"
   ],
   "openapi": {
     "source": "api/openapi-1.19.6.json",
