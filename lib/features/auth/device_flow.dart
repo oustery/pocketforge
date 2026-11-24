@@ -205,9 +205,8 @@ class GitHubDeviceFlow {
         continue;
       }
       networkFailures = 0;
-      final error = data['error'] is String
-          ? data['error'] as String
-          : null;
+      final errorRaw = data['error'];
+      final error = errorRaw is String ? errorRaw : null;
       if (error == null || error.isEmpty) {
         final accessToken = data['access_token'];
         if (accessToken is! String || accessToken.isEmpty) {
@@ -216,12 +215,12 @@ class GitHubDeviceFlow {
             'GitHub не вернул access_token',
           );
         }
+        final tokenTypeRaw = data['token_type'];
+        final scopeRaw = data['scope'];
         return DeviceFlowResult(
           accessToken: accessToken,
-          tokenType: (data['token_type'] ?? 'bearer') is String
-              ? data['token_type'] as String
-              : 'bearer',
-          scope: data['scope'] is String ? data['scope'] as String : '',
+          tokenType: tokenTypeRaw is String ? tokenTypeRaw : 'bearer',
+          scope: scopeRaw is String ? scopeRaw : '',
         );
       }
       switch (error) {

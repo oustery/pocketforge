@@ -91,11 +91,14 @@ class UpdateService {
     final data = res.data ?? const <String, Object?>{};
     // Манифест может быть кривым: жёсткие as-касты бросали TypeError
     // (не Exception), который уходил мимо всех обработчиков on Exception.
-    final version = data['version'] is String ? data['version'] as String : '';
-    final apkUrl = data['apkUrl'] is String ? data['apkUrl'] as String : '';
-    final notes = data['notes'] is String ? data['notes'] as String : '';
-    final apkSha256 =
-        data['apkSha256'] is String ? data['apkSha256'] as String : '';
+    final versionRaw = data['version'];
+    final apkUrlRaw = data['apkUrl'];
+    final notesRaw = data['notes'];
+    final shaRaw = data['apkSha256'];
+    final version = versionRaw is String ? versionRaw : '';
+    final apkUrl = apkUrlRaw is String ? apkUrlRaw : '';
+    final notes = notesRaw is String ? notesRaw : '';
+    final apkSha256 = shaRaw is String ? shaRaw : '';
     if (version.isEmpty || apkUrl.isEmpty) {
       throw const FormatException('Манифест без version/apkUrl');
     }

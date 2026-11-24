@@ -165,8 +165,9 @@ class AuthController extends AsyncNotifier<AuthState> {
       final raw = res.data;
       // Ответ сервера может быть чем угодно: as Map на списке/строке
       // бросал TypeError (не Exception) мимо всех обработчиков.
-      final data =
-          raw is Map ? Map<String, Object?>.from(raw) : const <String, Object?>{};
+      final data = raw is Map
+          ? Map<String, Object?>.from(raw)
+          : const <String, Object?>{};
       final entry = data[providerID];
       final methods = <AuthMethodChoice>[];
       if (entry is List) {

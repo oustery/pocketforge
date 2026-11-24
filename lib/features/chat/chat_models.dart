@@ -108,9 +108,8 @@ class ChatMessageView {
         }
       }
     }
-    final time = (m['time'] is Map
-            ? (m['time'] as Map).cast<String, Object?>()
-            : null);
+    final timeRaw = m['time'];
+    final time = timeRaw is Map ? timeRaw.cast<String, Object?>() : null;
     final idRaw = m['id'];
     final roleRaw = m['role'];
     return ChatMessageView(

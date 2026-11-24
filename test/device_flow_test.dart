@@ -213,7 +213,7 @@ class FlakyAdapter extends FakeFlowAdapter {
         reason: 'сеть пропала',
       );
     }
-    return super.fetch(options, requestStream, cancelFuture);
+    return await super.fetch(options, requestStream, cancelFuture);
   }
 }
 
