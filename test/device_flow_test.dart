@@ -51,7 +51,7 @@ class FakeFlowAdapter implements HttpClientAdapter {
 void main() {
   const config = DeviceFlowConfig(clientId: 'test_client');
 
-  Future<GitHubDeviceFlow> flow(FakeFlowAdapter adapter) async {
+  Future<GitHubDeviceFlow> flow(HttpClientAdapter adapter) async {
     final dio = Dio()..httpClientAdapter = adapter;
     return GitHubDeviceFlow(
       dio: dio,
