@@ -7,9 +7,17 @@ import java.io.IOException
 import java.util.concurrent.atomic.AtomicReference
 
 /// Запуск/остановка proot-процесса с opencode serve внутри.
-class ProotManager(private val ctx: Context) {
+class ProotManager(
+    private val ctx: Context,
+    private val shouldStop: () -> Boolean,
+) {
 
     private val processRef = AtomicReference<Process?>(null)
+    private val maintenanceProcess = AtomicReference<Process?>(null)
+
+    fun cancelMaintenance() {
+        maintenanceProcess.get()?.destroyForcibly()
+    }
 
     // Пишутся из boot-потока executor'а (startServe), читаются из main
     // (currentStateMap / connectionPassword): без volatile по JMM main
@@ -116,15 +124,21 @@ class ProotManager(private val ctx: Context) {
                 put("LANG", "C.UTF-8")
             }
         }
+        if (shouldStop()) throw IOException("Песочница останавливается")
         val p = pb.start()
-        val finished = p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)
-        if (!finished) {
-            p.destroyForcibly()
-            throw IOException(
-                "Команда не завершилась за $timeoutMs мс и была убита: $shellCommand",
-            )
+        maintenanceProcess.set(p)
+        try {
+            if (shouldStop()) throw IOException("Песочница останавливается")
+            if (!p.waitFor(timeoutMs, java.util.concurrent.TimeUnit.MILLISECONDS)) {
+                throw IOException(
+                    "Команда не завершилась за $timeoutMs мс и была убита: $shellCommand",
+                )
+            }
+            return p.exitValue()
+        } finally {
+            if (p.isAlive) p.destroyForcibly()
+            maintenanceProcess.compareAndSet(p, null)
         }
-        return p.exitValue()
     }
 
     /// Разовая команда с захватом stdout/stderr по отдельности (M7 терминал).

@@ -5,6 +5,7 @@ import 'package:crypto/crypto.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:pocketforge/app/design/forge_widgets.dart';
 import 'package:pocketforge/features/runtime/runtime_controller.dart';
 import 'package:pocketforge/features/update/update_service.dart';
@@ -145,7 +146,10 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       final res = await svc.checkForUpdate(currentVersion: cur);
       if (!mounted) return;
       setState(() {
-        if (_pending?.version != res.version || !res.isUpdate) {
+        if (_pending?.version != res.version ||
+            _pending?.apkUrl != res.apkUrl ||
+            _pending?.apkSha256 != res.apkSha256 ||
+            !res.isUpdate) {
           _downloadedPath = null;
         }
         _pending = res.isUpdate ? res : null;
@@ -232,7 +236,7 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
 
   /// Каталог для APK: кеш приложения (см. file_paths.xml).
   Future<Directory> getUpdatesDir() async {
-    final base = Directory.systemTemp;
+    final base = await getTemporaryDirectory();
     return Directory('${base.path}${Platform.pathSeparator}updates');
   }
 

@@ -104,8 +104,8 @@ object ArtifactsDownloader {
         conn.instanceFollowRedirects = true
         if (already > 0) conn.setRequestProperty("Range", "bytes=$already-")
 
-        val code = conn.responseCode
         try {
+            val code = conn.responseCode
             when {
                 code == 206 -> resumed(conn, dest, already, onProgress, shouldStop)
                 code == 200 -> fresh(conn, dest, onProgress, shouldStop)
@@ -115,12 +115,12 @@ object ArtifactsDownloader {
                 )
                 else -> throw IOException("HTTP $code для $url")
             }
+            return code
         } finally {
             // Раньше disconnect достигался только на 200/206/416: при
             // обрыве/фатальной ошибке keep-alive-сокеты висели до 5 ретраев.
             conn.disconnect()
         }
-        return code
     }
 
     private fun fresh(

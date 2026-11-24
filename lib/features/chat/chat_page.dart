@@ -159,7 +159,11 @@ class _MessageList extends StatelessWidget {
       for (final p in state.permissions)
         _PermissionCard(permission: p, sessionID: sessionID),
       for (final q in state.questions)
-        _QuestionCard(question: q, sessionID: sessionID),
+        _QuestionCard(
+          key: ValueKey(q['id'] ?? q['requestID']),
+          question: q,
+          sessionID: sessionID,
+        ),
     ];
     return ListView(
       reverse: true,
@@ -484,81 +488,136 @@ class _PermissionCard extends ConsumerWidget {
   }
 }
 
-class _QuestionCard extends ConsumerWidget {
-  const _QuestionCard({required this.question, required this.sessionID});
+class _QuestionCard extends ConsumerStatefulWidget {
+  const _QuestionCard({
+    required this.question,
+    required this.sessionID,
+    super.key,
+  });
 
   final Map<String, Object?> question;
   final String sessionID;
 
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    final id = (question['id'] ?? question['requestID']) as String?;
-    final questions =
-        (question['questions'] as List?)
-            ?.cast<Map<String, Object?>>()
-            .toList() ??
-        const <Map<String, Object?>>[];
+  ConsumerState<_QuestionCard> createState() => _QuestionCardState();
+}
+
+class _QuestionCardState extends ConsumerState<_QuestionCard> {
+  final _answers = <int, Set<String>>{};
+  bool _submitting = false;
+
+  Future<void> _submit(String id, List<List<String>>? answers) async {
+    setState(() => _submitting = true);
+    final controller = ref.read(
+      chatControllerProvider(widget.sessionID).notifier,
+    );
+    try {
+      if (answers == null) {
+        await controller.rejectQuestion(id);
+      } else {
+        await controller.replyQuestion(id, answers);
+      }
+    } on Exception catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Не удалось отправить ответ: $e')),
+      );
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final id = widget.question['id'] ?? widget.question['requestID'];
+    final rawQuestions = widget.question['questions'];
+    final questions = rawQuestions is List
+        ? rawQuestions.whereType<Map<String, Object?>>().toList()
+        : const <Map<String, Object?>>[];
+    final answers = <List<String>>[];
+    final fields = <Widget>[];
+    for (final (index, question) in questions.indexed) {
+      final title = question['message'] ?? question['question'];
+      final multiple = question['multiple'] == true;
+      final options = question['options'];
+      final labels = options is List
+          ? [
+              for (final opt in options.whereType<Map<String, Object?>>())
+                if (opt['label'] ?? opt['value'] case final String label)
+                  label,
+            ]
+          : const <String>[];
+      final selected = _answers[index] ?? const <String>{};
+      answers.add(labels.where(selected.contains).toList());
+      fields.addAll([
+        Text(
+          title is String ? title : 'Вопрос',
+          style: Theme.of(context).textTheme.titleSmall,
+        ),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 8,
+          children: [
+            for (final label in labels)
+              if (multiple)
+                FilterChip(
+                  label: Text(label),
+                  selected: selected.contains(label),
+                  onSelected: _submitting
+                      ? null
+                      : (checked) => setState(() {
+                          final selection = _answers.putIfAbsent(
+                            index,
+                            () => {},
+                          );
+                          if (checked) {
+                            selection.add(label);
+                          } else {
+                            selection.remove(label);
+                          }
+                        }),
+                )
+              else
+                ChoiceChip(
+                  label: Text(label),
+                  selected: selected.contains(label),
+                  onSelected: _submitting
+                      ? null
+                      : (checked) => setState(
+                          () => _answers[index] = {if (checked) label},
+                        ),
+                ),
+          ],
+        ),
+        const SizedBox(height: 12),
+      ]);
+    }
     return Card(
       child: Padding(
         padding: const EdgeInsets.all(12),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            for (final q in questions) ...[
-              Text(
-                (q['message'] ?? q['question'] ?? 'Вопрос') as String,
-                style: Theme.of(context).textTheme.titleSmall,
-              ),
-              const SizedBox(height: 8),
-              for (final opt
-                  in (q['options'] as List?)
-                          ?.cast<Map<String, Object?>>()
-                          .whereType<Map<String, Object?>>()
-                          .toList() ??
-                      const <Map<String, Object?>>[])
-                ListTile(
-                  dense: true,
-                  leading: const Icon(Icons.radio_button_unchecked, size: 18),
-                  title: Text((opt['label'] ?? opt['value'] ?? '') as String),
-                  onTap: () {
-                    if (id == null) return;
-                    unawaited(
-                      ref
-                          .read(chatControllerProvider(sessionID).notifier)
-                          .replyQuestion(id, [
-                            [(opt['label'] ?? opt['value'] ?? '') as String],
-                          ])
-                          .catchError((Object e) {
-                        if (!context.mounted) return;
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(content: Text('Не удалось ответить: $e')),
-                        );
-                      }),
-                    );
-                  },
+            ...fields,
+            Wrap(
+              spacing: 8,
+              children: [
+                FilledButton.tonal(
+                  onPressed: id is String &&
+                          !_submitting &&
+                          answers.isNotEmpty &&
+                          answers.every((answer) => answer.isNotEmpty)
+                      ? () => _submit(id, answers)
+                      : null,
+                  child: const Text('Ответить'),
                 ),
-            ],
-            TextButton(
-              onPressed: id == null
-                  ? null
-                  : () {
-                      unawaited(
-                        ref
-                            .read(
-                              chatControllerProvider(sessionID).notifier,
-                            )
-                            .rejectQuestion(id)
-                            .catchError((Object e) {
-                          if (!context.mounted) return;
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Не удалось отклонить: $e'),
-                            ),
-                          );
-                        }),
-                      );
-                    },
-              child: const Text('Отклонить'),
+                TextButton(
+                  onPressed: id is String && !_submitting
+                      ? () => _submit(id, null)
+                      : null,
+                  child: const Text('Отклонить'),
+                ),
+              ],
             ),
           ],
         ),

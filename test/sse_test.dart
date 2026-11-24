@@ -1,3 +1,7 @@
+import 'dart:async';
+import 'dart:typed_data';
+
+import 'package:dio/dio.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pocketforge/core/api/sse.dart';
 
@@ -16,9 +20,9 @@ Map<String, Object?> _m(List<Object?> events, int i) =>
 void main() {
   group('parseSseStream', () {
     test('разбирает одиночный фрейм', () async {
-      final events =
-          await parseSseStream(_bytes(_frames([_sse('{"type":"x"}')])))
-              .toList();
+      final events = await parseSseStream(
+        _bytes(_frames([_sse('{"type":"x"}')])),
+      ).toList();
       expect(events, hasLength(1));
       expect(_m(events, 0)['type'], 'x');
     });
@@ -66,6 +70,25 @@ void main() {
       expect(_m(events, 0)['split'], isTrue);
     });
   });
+
+  test('SSE переподключается после тишины на открытом HTTP-потоке', () async {
+    final adapter = _QuietAdapter();
+    final dio = Dio(BaseOptions(baseUrl: 'http://127.0.0.1'))
+      ..httpClientAdapter = adapter;
+    final client = SseClient(
+      dio: dio,
+      path: '/api/event',
+      idleTimeout: const Duration(milliseconds: 25),
+      maxBackoffMs: 2,
+    );
+    addTearDown(client.close);
+    final event = await client.stream().first.timeout(
+      const Duration(seconds: 2),
+    );
+    expect(event, {'type': 'server.connected'});
+    expect(adapter.requests, 2);
+    expect(adapter.quiet.hasListener, isFalse);
+  });
 }
 
 Stream<List<int>> _bytes(Stream<String> lines) async* {
@@ -79,5 +102,23 @@ Stream<List<int>> _splitBytes(String s) async* {
   for (var i = 0; i < bytes.length; i += 3) {
     final end = i + 3 > bytes.length ? bytes.length : i + 3;
     yield bytes.sublist(i, end);
+  }
+}
+
+class _QuietAdapter implements HttpClientAdapter {
+  int requests = 0;
+  final quiet = StreamController<Uint8List>();
+
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (++requests == 1) return ResponseBody(quiet.stream, 200);
+    return ResponseBody.fromString(_sse('{"type":"server.connected"}'), 200);
   }
 }

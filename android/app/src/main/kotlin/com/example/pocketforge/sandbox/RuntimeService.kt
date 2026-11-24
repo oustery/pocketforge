@@ -195,7 +195,7 @@ class RuntimeService : Service() {
         destroyed = false
         SandboxPaths.ensureAll(this)
         SandboxLogger.init(this)
-        manager = ProotManager(this)
+        manager = ProotManager(this) { stopRequested || destroyed }
         installer = RootfsInstaller(this)
         executor = Executors.newSingleThreadExecutor()
         watchdogHandler = Handler(Looper.getMainLooper())
@@ -212,10 +212,12 @@ class RuntimeService : Service() {
                 /// manager.stop() ждёт до ~8 с (destroy + waitFor) и на
                 /// main-потоке давал ANR при залипшем proot.
                 stopRequested = true
+                manager.cancelMaintenance()
                 executor.execute { shutdown() }
             }
             ACTION_RESET -> {
                 stopRequested = true
+                manager.cancelMaintenance()
                 executor.execute {
                     shutdown()
                     SandboxPaths.wipe(this)
@@ -621,7 +623,7 @@ class RuntimeService : Service() {
                 try {
                     executor.execute {
                         val p = manager
-                        if (phase == Phase.READY) {
+                        if (!stopRequested && phase == Phase.READY) {
                             if (!p.isAlive()) {
                                 Log.w(TAG, "watchdog: proot мёртв — перезапуск")
                                 healthFailures.set(0)

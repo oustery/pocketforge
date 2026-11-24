@@ -10,9 +10,10 @@ import 'package:pocketforge/features/update/update_service.dart';
 /// Fake-адаптер: манифест + APK-байты + платформенный канал через
 /// исключение (не Android).
 class UpdateAdapter implements HttpClientAdapter {
-  UpdateAdapter(this.manifest);
+  UpdateAdapter(this.manifest, {this.contentLength = 1024});
 
   final Map<String, Object?> manifest;
+  final int contentLength;
 
   @override
   void close({bool force = false}) {}
@@ -35,7 +36,7 @@ class UpdateAdapter implements HttpClientAdapter {
         ),
         200,
         headers: {
-          Headers.contentLengthHeader: ['1024'],
+          Headers.contentLengthHeader: ['$contentLength'],
           Headers.contentTypeHeader: [
             'application/vnd.android.package-archive',
           ],
@@ -178,6 +179,23 @@ void main() {
         ),
         throwsException,
       );
+    });
+
+    test('неполный APK не заменяет ранее скачанный файл', () async {
+      final svc = service(UpdateAdapter({}, contentLength: 2048));
+      final dir = await Directory.systemTemp.createTemp('pf_update_test');
+      addTearDown(() => dir.delete(recursive: true));
+      final previous = await File('${dir.path}/pf.apk').writeAsString('old');
+
+      await expectLater(
+        svc.downloadApk('https://x.example/pf.apk', dir: dir),
+        throwsException,
+      );
+
+      expect(await previous.readAsString(), 'old');
+      expect(await dir.list().map((entry) => entry.path).toList(), [
+        previous.path,
+      ]);
     });
 
     test('currentVersion без платформы — unknown', () async {

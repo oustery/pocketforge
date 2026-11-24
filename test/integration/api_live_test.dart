@@ -117,7 +117,10 @@ void main() {
   test(
     'git (M5): vcsStatus/vcsDiff + обзор из .git через file API',
     () async {
-      final service = GitService(client);
+      final workDir = Platform.environment['LIVE_GIT_DIR'];
+      final service = workDir == null
+          ? GitService(client)
+          : GitService(client, workDir: workDir);
       final o = await service.overview();
       expect(o.head.detached, isFalse);
       expect(o.head.branch, 'main');

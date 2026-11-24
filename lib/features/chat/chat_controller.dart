@@ -120,35 +120,30 @@ class ChatController extends AsyncNotifier<ChatState> {
   /// Идентификатор сессии.
   final String arg;
 
-  StreamSubscription<Map<String, Object?>>? _sub;
   final ChatEventReducer _reducer = ChatEventReducer();
 
   @override
   FutureOr<ChatState> build() {
     final client = ref.watch(chatClientProvider);
-    ref.onDispose(() => _sub?.cancel());
-
-    // Поток событий применяется только к своей сессии.
-    unawaited(_sub?.cancel());
     final backlog = <Map<String, Object?>>[];
-    _sub = ref.watch(rawEventsProvider).listen((frame) {
-      // Начальная загрузка ещё не завершилась (state.value == null):
-      // события буферизуем и отыгрываем после загрузки — иначе старт
-      // генерации, session.error и permission.asked в первые секунды
-      // молча терялись.
-      if (state.value == null) {
+    var loading = true;
+    final subscription = ref.watch(rawEventsProvider).listen((frame) {
+      if (!_belongsToSession(frame)) return;
+      if (loading) {
         backlog.add(frame);
         return;
       }
       _applyFrame(frame);
     });
+    ref.onDispose(() => unawaited(subscription.cancel()));
 
     return _load(arg, client).then((loaded) {
       var st = loaded;
       for (final frame in backlog) {
-        st = _nextState(st, frame) ?? st;
+        st = _reducer.apply(st, frame) ?? st;
       }
       backlog.clear();
+      loading = false;
       return st;
     });
   }
@@ -157,26 +152,21 @@ class ChatController extends AsyncNotifier<ChatState> {
   void _applyFrame(Map<String, Object?> frame) {
     final cur = state.value;
     if (cur == null) return;
-    final next = _nextState(cur, frame);
+    final next = _reducer.apply(cur, frame);
     if (next != null) {
       state = AsyncValue<ChatState>.data(next);
     }
   }
 
-  /// Фильтр своей сессии + редьюсер; возвращает новое состояние или null.
-  ChatState? _nextState(ChatState cur, Map<String, Object?> frame) {
-    final type = frame['type'] as String?;
-    if (type != null && type.startsWith('server.')) return null;
+  bool _belongsToSession(Map<String, Object?> frame) {
     final raw = frame['data'] ?? frame['properties'] ?? frame;
-    if (raw is! Map) return null;
-    final payload = Map<String, Object?>.from(raw);
-    final info = payload['info'];
-    final sessionID =
-        (payload['sessionID'] ??
-                (info is Map ? info['sessionID'] : null))
-            as String?;
-    if (sessionID != null && sessionID != arg) return null;
-    return _reducer.apply(cur, frame);
+    if (raw is! Map) return false;
+    final info = raw['info'];
+    final part = raw['part'];
+    final sessionID = raw['sessionID'] ??
+        (info is Map ? info['sessionID'] : null) ??
+        (part is Map ? part['sessionID'] : null);
+    return sessionID == arg;
   }
 
   Future<ChatState> _load(String sessionID, OpenCodeClient client) async {
@@ -216,7 +206,7 @@ class ChatController extends AsyncNotifier<ChatState> {
       final out = <Map<String, Object?>>[];
       for (final e in res) {
         if (e is Map) {
-          out.add(Map<String, Object?>.from(e));
+          if (e['sessionID'] == arg) out.add(Map<String, Object?>.from(e));
         } else if (e is PermissionRequest || e is QuestionRequest) {
           // Сгенерированный клиент возвращает типизированные модели:
           // приводим к raw-виду, который ждут редьюсер и карточки
@@ -224,7 +214,7 @@ class ChatController extends AsyncNotifier<ChatState> {
           final raw = e is PermissionRequest
               ? e.toJson()
               : (e as QuestionRequest).toJson();
-          out.add(Map<String, Object?>.from(raw));
+          if (raw['sessionID'] == arg) out.add(raw);
         }
       }
       return out;
@@ -239,6 +229,7 @@ class ChatController extends AsyncNotifier<ChatState> {
     List<Map<String, Object?>> extraParts = const [],
   }) async {
     final client = ref.read(chatClientProvider);
+    final lifecycle = ref;
     final parts = <Map<String, Object?>>[
       {'type': 'text', 'text': text},
       ...extraParts,
@@ -255,9 +246,18 @@ class ChatController extends AsyncNotifier<ChatState> {
       );
     }
     try {
-      await client.sessionPrompt(sessionID: arg, body: {'parts': parts});
+      final reply = await client.sessionPrompt(
+        sessionID: arg,
+        body: {'parts': parts},
+      );
+      if (!lifecycle.mounted) return;
+      _applyFrame({
+        'type': 'message.updated',
+        'info': {...reply.info.toJson(), 'parts': reply.parts},
+      });
+      _applyFrame({'type': 'session.idle'});
     } on Exception catch (e) {
-      final cur2 = state.value;
+      final cur2 = lifecycle.mounted ? state.value : null;
       if (cur2 != null) {
         state = AsyncValue<ChatState>.data(
           ChatState(

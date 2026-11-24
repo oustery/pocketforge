@@ -84,11 +84,14 @@ class UpdateService {
     String? manifestUrl,
   }) async {
     final url = manifestUrl ?? kDefaultManifestUrl;
-    final res = await _dio.get<Map<String, Object?>>(
+    final res = await _dio.get<Object?>(
       url,
       options: Options(responseType: ResponseType.json),
     );
-    final data = res.data ?? const <String, Object?>{};
+    final data = res.data;
+    if (data is! Map<String, Object?>) {
+      throw const FormatException('Манифест обновления должен быть объектом');
+    }
     // Манифест может быть кривым: жёсткие as-касты бросали TypeError
     // (не Exception), который уходил мимо всех обработчиков on Exception.
     final versionRaw = data['version'];
@@ -98,6 +101,9 @@ class UpdateService {
     final version = versionRaw is String ? versionRaw : '';
     final apkUrl = apkUrlRaw is String ? apkUrlRaw : '';
     final notes = notesRaw is String ? notesRaw : '';
+    if (shaRaw != null && shaRaw is! String) {
+      throw const FormatException('Некорректный apkSha256 в манифесте');
+    }
     final apkSha256 = shaRaw is String ? shaRaw : '';
     if (version.isEmpty || apkUrl.isEmpty) {
       throw const FormatException('Манифест без version/apkUrl');
@@ -128,56 +134,67 @@ class UpdateService {
     String? expectedSha256,
     void Function(int received, int? total)? onProgress,
   }) async {
-    final name = fileName ?? url.split('/').last.split('?').first;
-    final target = File('${dir.path}${Platform.pathSeparator}$name');
-    await dir.create(recursive: true);
-    for (var attempt = 1; attempt <= 2; attempt++) {
-      final resp = await _dio.get<ResponseBody>(
-        url,
-        options: Options(
-          responseType: ResponseType.stream,
-          followRedirects: true,
-        ),
-      );
-      final body = resp.data;
-      if (body == null) {
-        throw Exception('Пустой ответ при скачивании APK');
-      }
-      final total = int.tryParse(
-        resp.headers.value(Headers.contentLengthHeader) ?? '',
-      );
-      final digestSink = _DigestSink();
-      final hasher = sha256.startChunkedConversion(digestSink);
-      var received = 0;
-      final sink = target.openWrite();
-      try {
-        await for (final chunk in body.stream) {
-          hasher.add(chunk);
-          sink.add(chunk);
-          received += chunk.length;
-          onProgress?.call(received, total);
-        }
-        await sink.flush();
-      } finally {
-        await sink.close();
-      }
-      hasher.close();
-      final digest = digestSink.digest;
-      if (digest == null) {
-        throw Exception('Не удалось вычислить sha256 APK');
-      }
-      final actual = digest.toString().toLowerCase();
-      if (expectedSha256 == null || actual == expectedSha256) {
-        return target.path;
-      }
-      if (attempt == 2) {
-        throw Exception(
-          'APK скачан битым: sha256 $actual не совпал с ожидаемым '
-          '$expectedSha256 даже после повторной попытки',
-        );
-      }
+    final name = fileName ?? Uri.parse(url).pathSegments.lastOrNull ?? '';
+    if (name.isEmpty ||
+        name == '.' ||
+        name == '..' ||
+        name.contains('/') ||
+        name.contains(r'\')) {
+      throw const FormatException('Некорректное имя файла APK');
     }
-    throw StateError('downloadApk: недостижимая ветка');
+    final separator = Platform.pathSeparator;
+    final target = File('${dir.path}$separator$name');
+    await dir.create(recursive: true);
+    final staging = await dir.createTemp('.download-');
+    final partial = File('${staging.path}${separator}apk.part');
+    final expected = expectedSha256?.toLowerCase();
+    try {
+      for (var attempt = 1; attempt <= 2; attempt++) {
+        final resp = await _dio.get<ResponseBody>(
+          url,
+          options: Options(responseType: ResponseType.stream),
+        );
+        final body = resp.data;
+        if (body == null) {
+          throw Exception('Пустой ответ при скачивании APK');
+        }
+        final total = int.tryParse(
+          resp.headers.value(Headers.contentLengthHeader) ?? '',
+        );
+        final encoding = resp.headers.value('content-encoding');
+        final digestSink = _DigestSink();
+        final hasher = sha256.startChunkedConversion(digestSink);
+        var received = 0;
+        final sink = partial.openWrite();
+        try {
+          await for (final chunk in body.stream) {
+            hasher.add(chunk);
+            sink.add(chunk);
+            received += chunk.length;
+            onProgress?.call(received, total);
+          }
+          await sink.flush();
+        } finally {
+          await sink.close();
+          hasher.close();
+        }
+        final actual = digestSink.digest.toString();
+        final complete = received > 0 &&
+            (total == null ||
+                (encoding != null && encoding != 'identity') ||
+                received == total);
+        if (complete && (expected == null || actual == expected)) {
+          return (await partial.rename(target.path)).path;
+        }
+        if (attempt == 2) {
+          if (!complete) throw Exception('APK скачан не полностью');
+          throw Exception('sha256 APK: получено $actual, ожидалось $expected');
+        }
+      }
+      throw StateError('downloadApk: недостижимая ветка');
+    } finally {
+      await staging.delete(recursive: true);
+    }
   }
 
   /// Устанавливает APK (Android: FileProvider + ACTION_VIEW).

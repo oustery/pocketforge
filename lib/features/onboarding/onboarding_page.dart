@@ -73,7 +73,7 @@ class _OnboardingPageState extends ConsumerState<OnboardingPage> {
                       leading: Icon(Icons.memory_outlined),
                       title: Text('Подготовить песочницу'),
                       subtitle: Text(
-                        'Первый запуск скачает около 115 МБ. '
+                        'Первый запуск скачает около 140 МБ. '
                         'Рекомендуем Wi-Fi и 2 ГБ свободного места.',
                       ),
                     ),

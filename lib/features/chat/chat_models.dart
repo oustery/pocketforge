@@ -198,7 +198,7 @@ class ChatEventReducer {
   /// Применяет фрейм к состоянию; возвращает новое состояние
   /// или null, если событие не влияет на чат.
   ChatState? apply(ChatState state, Map<String, Object?> frame) {
-    final type = frame['type'] as String?;
+    final type = frame['type'];
     final raw = frame['data'] ?? frame['properties'] ?? frame;
     if (raw is! Map) return null;
     final payload = Map<String, Object?>.from(raw);
@@ -220,6 +220,25 @@ class ChatEventReducer {
         return state.withMessages(
           _upsertPart(state.messages, messageID, view),
         );
+      case 'message.part.removed':
+        final messageID = payload['messageID'];
+        final partID = payload['partID'];
+        if (messageID is! String || partID is! String) return null;
+        return state.withMessages([
+          for (final message in state.messages)
+            if (message.id == messageID)
+              ChatMessageView(
+                id: message.id,
+                role: message.role,
+                timeCreated: message.timeCreated,
+                parts: [
+                  for (final part in message.parts)
+                    if (part.id != partID) part,
+                ],
+              )
+            else
+              message,
+        ]);
       case 'message.removed':
         final messageID = payload['messageID'];
         if (messageID is! String) return null;
@@ -261,6 +280,14 @@ class ChatEventReducer {
             .where((e) => (e['id'] ?? e['requestID']) != id)
             .toList();
         return _with(state, questions: list);
+      case 'session.status':
+        final status = payload['status'];
+        final phase = status is Map ? status['type'] : null;
+        return switch (phase) {
+          'busy' || 'retry' => _with(state, streaming: true),
+          'idle' => _with(state, streaming: false),
+          _ => null,
+        };
       case 'session.idle':
         return _with(state, streaming: false);
       case 'session.error':
