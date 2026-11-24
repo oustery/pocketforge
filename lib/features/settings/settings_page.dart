@@ -145,7 +145,6 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       final res = await svc.checkForUpdate(currentVersion: cur);
       if (!mounted) return;
       setState(() {
-        _checking = false;
         if (_pending?.version != res.version || !res.isUpdate) {
           _downloadedPath = null;
         }
@@ -156,10 +155,13 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       });
     } on Exception catch (e) {
       if (mounted) {
-        setState(() {
-          _checking = false;
-          _error = e.toString();
-        });
+        setState(() => _error = e.toString());
+      }
+    } finally {
+      // Без finally любая ошибка вне on Exception навсегда залипала
+      // спиннер проверки и блокировала кнопку обновления.
+      if (mounted) {
+        setState(() => _checking = false);
       }
     }
   }
@@ -176,11 +178,15 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
       var path = _downloadedPath;
       // Файл из кеша перепроверяем по sha256 из манифеста: битый или
       // обрезанный APK — источник ошибки установщика «пакет недействителен».
+      // Хеш считаем потоково — APK не читаем целиком в память.
       if (path != null && res.apkSha256 != null) {
         final cached = File(path);
-        final ok = cached.existsSync() &&
-            sha256.convert(await cached.readAsBytes()).toString() ==
-                res.apkSha256!.toLowerCase();
+        var ok = cached.existsSync();
+        if (ok) {
+          final digest = await sha256.bind(cached.openRead()).first;
+          ok = digest.toString().toLowerCase() ==
+              res.apkSha256!.toLowerCase();
+        }
         if (!ok) path = null;
       }
       if (path == null || !File(path).existsSync()) {
@@ -203,6 +209,14 @@ class _UpdateSectionState extends ConsumerState<UpdateSection> {
               _status = 'Разрешите установку в Android, затем вернитесь сюда.',
         );
         await svc.openInstallPermissionSettings();
+      } else if (status == null && mounted) {
+        // null — неизвестный ответ канала: без этого ветвления установка
+        // молча не происходила ни с каким сообщением.
+        setState(
+          () => _error =
+              'Не удалось запустить установку: платформа не ответила на '
+              'installApk. Перезапустите приложение и попробуйте снова.',
+        );
       }
     } on Exception catch (e) {
       if (mounted) setState(() => _error = e.toString());
@@ -320,6 +334,9 @@ class _InstallPermissionRowState extends ConsumerState<InstallPermissionRow> {
   }
 
   Future<void> _refresh() async {
+    // ref недоступен после демонтирования виджета (возврат из настроек
+    // Android мог случиться, когда экран уже закрыт).
+    if (!mounted) return;
     final granted = await ref.read(updateServiceProvider).canRequestInstall();
     if (mounted) {
       setState(() => _granted = granted);

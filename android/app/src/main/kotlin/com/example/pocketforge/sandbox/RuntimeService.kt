@@ -63,6 +63,14 @@ class RuntimeService : Service() {
         @Volatile
         private var destroyed: Boolean = false
 
+        // Хвосты логов пересчитываются не чаще раза в секунду: без кеша
+        // currentStateMap() (main-поток: status-поллинг и каждый push)
+        // читал три файла с диска при каждом обращении.
+        private var logTailCache: String = ""
+
+        @Volatile
+        private var logTailCacheAt: Long = 0
+
         fun lastErrorSet(value: String?) = synchronized(stateLock) {
             lastError = value
         }
@@ -72,14 +80,19 @@ class RuntimeService : Service() {
             // В панели лога показываем и загрузочный лог: до READY serve.log
             // пуст, а именно тогда падает установка — apt.log обязан быть виден.
             val logTail = svc?.let {
-                val aptTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apt.log"), 4096).trim()
-                val serveTail = HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log"), 4096).trim()
-                val bootTail = SandboxLogger.tail(2048).trim()
-                buildString {
-                    if (bootTail.isNotEmpty()) append("── boot.log ──\n$bootTail\n")
-                    if (aptTail.isNotEmpty()) append("\n── apt.log ──\n$aptTail\n")
-                    if (serveTail.isNotEmpty()) append("\n── serve.log ──\n$serveTail")
+                val now = android.os.SystemClock.elapsedRealtime()
+                if (now - logTailCacheAt > 1000) {
+                    val aptTail = HealthCheck.tail(File(SandboxPaths.logs(it), "apt.log"), 4096).trim()
+                    val serveTail = HealthCheck.tail(File(SandboxPaths.logs(it), "serve.log"), 4096).trim()
+                    val bootTail = SandboxLogger.tail(2048).trim()
+                    logTailCache = buildString {
+                        if (bootTail.isNotEmpty()) append("── boot.log ──\n$bootTail\n")
+                        if (aptTail.isNotEmpty()) append("\n── apt.log ──\n$aptTail\n")
+                        if (serveTail.isNotEmpty()) append("\n── serve.log ──\n$serveTail")
+                    }
+                    logTailCacheAt = now
                 }
+                logTailCache
             } ?: ""
             mapOf(
                 "phase" to phase.name.lowercase(),
@@ -103,12 +116,22 @@ class RuntimeService : Service() {
 
         fun stopSandbox(ctx: Context) {
             val intent = Intent(ctx, RuntimeService::class.java).setAction(ACTION_STOP)
-            ctx.startService(intent)
+            // O+: startService из фона (Dart-канал при живом FGS) бросает
+            // IllegalStateException и stop не срабатывает вовсе.
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                ctx.startForegroundService(intent)
+            } else {
+                ctx.startService(intent)
+            }
         }
 
         fun resetSandbox(ctx: Context) {
             val intent = Intent(ctx, RuntimeService::class.java).setAction(ACTION_RESET)
-            ctx.startService(intent)
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                ctx.startForegroundService(intent)
+            } else {
+                ctx.startService(intent)
+            }
         }
 
         /// Команда в песочнице с захватом вывода (M7 терминал).
@@ -165,6 +188,11 @@ class RuntimeService : Service() {
 
     override fun onCreate() {
         super.onCreate()
+        // Сервис может пересоздаваться в том же процессе после
+        // shutdown() → onDestroy (destroyed = true): без сброса watchdog
+        // навсегда выходил по if (destroyed) return и proot больше не
+        // перезапускался.
+        destroyed = false
         SandboxPaths.ensureAll(this)
         SandboxLogger.init(this)
         manager = ProotManager(this)
@@ -180,14 +208,14 @@ class RuntimeService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 // Немедленно: флаг до executor (boot прервётся в ближайшей
-                /// проверке), proot гасим сразу — waitFor вернёт управление.
+                /// проверке). Сам proot гасим внутри shutdown() на executor —
+                /// manager.stop() ждёт до ~8 с (destroy + waitFor) и на
+                /// main-потоке давал ANR при залипшем proot.
                 stopRequested = true
-                manager.stop()
                 executor.execute { shutdown() }
             }
             ACTION_RESET -> {
                 stopRequested = true
-                manager.stop()
                 executor.execute {
                     shutdown()
                     SandboxPaths.wipe(this)

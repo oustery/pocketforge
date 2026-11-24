@@ -373,7 +373,9 @@ class _GitBody extends StatelessWidget {
                   style: const TextStyle(fontFamily: 'monospace'),
                 ),
                 subtitle: Text(
-                  '+${f.additions} −${f.deletions}',
+                  // additions/deletions в модели double: без toInt() UI
+                  // показывал «+12.0 −3.0».
+                  '+${f.additions.toInt()} −${f.deletions.toInt()}',
                   style: Theme.of(context).textTheme.bodySmall,
                 ),
               ),

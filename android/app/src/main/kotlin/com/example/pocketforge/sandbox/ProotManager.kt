@@ -11,8 +11,13 @@ class ProotManager(private val ctx: Context) {
 
     private val processRef = AtomicReference<Process?>(null)
 
+    // Пишутся из boot-потока executor'а (startServe), читаются из main
+    // (currentStateMap / connectionPassword): без volatile по JMM main
+    // мог видеть устаревший port=0/пустой пароль.
+    @Volatile
     var port: Int = 0
         private set
+    @Volatile
     var password: String = ""
         private set
 
@@ -221,14 +226,16 @@ object HealthCheck {
     fun tail(file: File, maxBytes: Int = 8192): String {
         if (!file.exists()) return ""
         return try {
-            val raf = java.io.RandomAccessFile(file, "r")
-            val len = raf.length().toInt()
-            val start = if (len <= maxBytes) 0 else len - maxBytes
-            raf.seek(start.toLong())
-            val buf = ByteArray(len - start)
-            raf.readFully(buf)
-            raf.close()
-            String(buf, Charsets.UTF_8)
+            // use{} закрывает fd и при IOException усечки (гонка с
+            // ротацией/записью) — без него fd тек при каждом опросе.
+            java.io.RandomAccessFile(file, "r").use { raf ->
+                val len = raf.length().toInt()
+                val start = if (len <= maxBytes) 0 else len - maxBytes
+                raf.seek(start.toLong())
+                val buf = ByteArray(len - start)
+                raf.readFully(buf)
+                String(buf, Charsets.UTF_8)
+            }
         } catch (_: IOException) {
             ""
         }

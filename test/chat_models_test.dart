@@ -169,6 +169,45 @@ void main() {
       expect(s.streaming, isFalse);
     });
 
+    test('session.error принимает и строковый error (v1-форма)', () {
+      // Каст as Map на строке ронял обработчик TypeError'ом, и ошибка
+      // сессии вообще не доходила до пользователя.
+      final s = _apply(
+        const ChatState(messages: [], streaming: true),
+        {
+          'type': 'session.error',
+          'data': {'error': 'Провайдер не настроен'},
+        },
+      );
+      expect(s.error, 'Провайдер не настроен');
+      expect(s.streaming, isFalse);
+    });
+
+    test('message.updated (v1, info без parts) сохраняет части', () {
+      var s = const ChatState(messages: []);
+      s = _apply(s, {
+        'type': 'message.part.updated',
+        'data': {
+          'part': {
+            'id': 'prt_p1',
+            'messageID': 'msg_p1',
+            'type': 'text',
+            'text': 'Частичный ответ',
+          },
+        },
+      });
+      // v1-апдейт несёт только info: без merge'а parts затирались.
+      s = _apply(s, {
+        'type': 'message.updated',
+        'properties': {
+          'info': {'id': 'msg_p1', 'role': 'assistant'},
+        },
+      });
+      expect(s.messages, hasLength(1));
+      expect(s.messages[0].parts, hasLength(1));
+      expect(s.messages[0].parts[0].text, 'Частичный ответ');
+    });
+
     test('неизвестные типы не ломают состояние', () {
       const s = ChatState(messages: []);
       final next = ChatEventReducer().apply(

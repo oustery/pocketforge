@@ -83,10 +83,26 @@ class SseClient {
 
   /// Поток событий. Подключается при первом прослушивании; при разрыве
   /// восстанавливает соединение (если [reconnect]).
+  ///
+  /// Устойчивость на мобильных сетях: backoff сбрасывается только после
+  /// реального события (crash-loop сервера больше не превращается в
+  /// шторм переподключений), а при 90 с полной тишины соединение
+  /// считается мёртвым и переподключается (half-open TCP после сна
+  /// модема иначе висит вечно без событий).
   Stream<Object?> stream({bool reconnect = true}) {
     late StreamController<Object?> controller;
     StreamSubscription<Object?>? sub;
+    Completer<void>? active;
+    Timer? watchdog;
     var attempt = 0;
+
+    void armWatchdog() {
+      watchdog?.cancel();
+      watchdog = Timer(const Duration(seconds: 90), () {
+        // Тишина: рвём зависшее соединение — onDone уведёт цикл в backoff.
+        unawaited(sub?.cancel());
+      });
+    }
 
     Future<void> run() async {
       while (!_closed) {
@@ -98,10 +114,28 @@ class SseClient {
               headers: {'Accept': 'text/event-stream'},
             ),
           );
-          attempt = 0;
+          if (_closed) {
+            // Отмена пришла, пока ждали GET: тело не слушаем, соединение
+            // закрываем (иначе HTTP-стрим утекает до закрытия сервером).
+            final body = res.data;
+            if (body != null) {
+              await body.stream
+                  .listen((_) {}, cancelOnError: true)
+                  .cancel()
+                  .timeout(const Duration(seconds: 5), onTimeout: () {});
+            }
+            break;
+          }
           final completer = Completer<void>();
+          active = completer;
           sub = parseSseStream(res.data!.stream).listen(
-            controller.add,
+            (event) {
+              // Сброс backoff только после живого события: успешный GET
+              // ещё не гарантирует работающий стрим.
+              attempt = 0;
+              armWatchdog();
+              controller.add(event);
+            },
             onDone: () {
               if (!completer.isCompleted) completer.complete();
             },
@@ -110,11 +144,16 @@ class SseClient {
             },
             cancelOnError: true,
           );
+          armWatchdog();
           await completer.future;
         } on Exception {
           if (_closed) break;
           // разрыв/таймаут — уходим в backoff
         }
+        watchdog?.cancel();
+        unawaited(sub?.cancel());
+        sub = null;
+        active = null;
         if (!reconnect || _closed) break;
         final delayMs = min(maxBackoffMs, 1000 * pow(2, attempt++).toInt());
         try {
@@ -123,6 +162,7 @@ class SseClient {
           break;
         }
       }
+      watchdog?.cancel();
       await controller.close();
     }
 
@@ -130,7 +170,10 @@ class SseClient {
       onListen: run,
       onCancel: () {
         _closed = true;
+        watchdog?.cancel();
         unawaited(sub?.cancel());
+        final a = active;
+        if (a != null && !a.isCompleted) a.complete();
       },
     );
     return controller.stream;

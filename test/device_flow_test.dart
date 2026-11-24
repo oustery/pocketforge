@@ -51,7 +51,7 @@ class FakeFlowAdapter implements HttpClientAdapter {
 void main() {
   const config = DeviceFlowConfig(clientId: 'test_client');
 
-  Future<GitHubDeviceFlow> flow(FakeFlowAdapter adapter) async {
+  Future<GitHubDeviceFlow> flow(HttpClientAdapter adapter) async {
     final dio = Dio()..httpClientAdapter = adapter;
     return GitHubDeviceFlow(
       dio: dio,
@@ -130,5 +130,122 @@ void main() {
       final code = await f.requestCode();
       await f.poll(code);
     });
+
+    test('poll: сетевые сбои не убивают flow', () async {
+      final adapter = FlakyAdapter([
+        {
+          'access_token': 'gho_ok',
+          'token_type': 'bearer',
+          'scope': '',
+        },
+      ]);
+      final f = await flow(adapter);
+      final code = await f.requestCode();
+      final result = await f.poll(code);
+      expect(result.accessToken, 'gho_ok');
+    });
+
+    test('poll: 5 сетевых сбоев подряд → DeviceFlowException(network)',
+        () async {
+      final f = await flow(AlwaysFailAdapter());
+      final code = await f.requestCode();
+      await expectLater(
+        f.poll(code),
+        throwsA(
+          isA<DeviceFlowException>()
+              .having((e) => e.code, 'code', 'network'),
+        ),
+      );
+    });
+
+    test('requestCode: тело с error (HTTP 200) → DeviceFlowException',
+        () async {
+      final f = await flow(ErrorDeviceCodeAdapter());
+      await expectLater(
+        f.requestCode(),
+        throwsA(
+          isA<DeviceFlowException>()
+              .having((e) => e.code, 'code', 'invalid_request'),
+        ),
+      );
+    });
   });
+}
+
+/// Adapter: /device/code возвращает 200 с телом ошибки (реальный
+///поведение GitHub при неправильном client_id).
+class ErrorDeviceCodeAdapter implements HttpClientAdapter {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    return ResponseBody.fromString(
+      jsonEncode(<String, Object?>{'error': 'unauthorized_client'}),
+      200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
+}
+
+/// Adapter: первые два обращения к /access_token — сетевой сбой.
+class FlakyAdapter extends FakeFlowAdapter {
+  FlakyAdapter(super.steps);
+
+  int _fails = 0;
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.uri.path.endsWith('/access_token') && _fails < 2) {
+      _fails++;
+      throw DioException.connectionError(
+        requestOptions: options,
+        reason: 'сеть пропала',
+      );
+    }
+    return await super.fetch(options, requestStream, cancelFuture);
+  }
+}
+
+/// Adapter: все /access_token — сетевой сбой.
+class AlwaysFailAdapter implements HttpClientAdapter {
+  @override
+  void close({bool force = false}) {}
+
+  @override
+  Future<ResponseBody> fetch(
+    RequestOptions options,
+    Stream<Uint8List>? requestStream,
+    Future<void>? cancelFuture,
+  ) async {
+    if (options.uri.path.endsWith('/access_token')) {
+      throw DioException.connectionError(
+        requestOptions: options,
+        reason: 'сеть недоступна',
+      );
+    }
+    return ResponseBody.fromString(
+      jsonEncode(<String, Object?>{
+        'device_code': 'dev_123',
+        'user_code': 'ABCD-1234',
+        'verification_uri': 'https://github.com/login/device',
+        'expires_in': 900,
+        'interval': 5,
+      }),
+      200,
+      headers: {
+        Headers.contentTypeHeader: [Headers.jsonContentType],
+      },
+    );
+  }
 }

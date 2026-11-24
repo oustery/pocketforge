@@ -418,10 +418,18 @@ class _PermissionCard extends ConsumerWidget {
         (permission['patterns'] as List?)?.cast<String>() ?? const [];
     void reply(String reply) {
       if (id == null) return;
+      // Ошибку не глотаем: без неё карточка залипает без всякой реакции
+      // на сетевой сбой.
       unawaited(
         ref
             .read(chatControllerProvider(sessionID).notifier)
-            .replyPermission(id, reply),
+            .replyPermission(id, reply)
+            .catchError((Object e) {
+          if (!context.mounted) return;
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Не удалось отправить ответ: $e')),
+          );
+        }),
       );
     }
 
@@ -519,7 +527,13 @@ class _QuestionCard extends ConsumerWidget {
                           .read(chatControllerProvider(sessionID).notifier)
                           .replyQuestion(id, [
                             [(opt['label'] ?? opt['value'] ?? '') as String],
-                          ]),
+                          ])
+                          .catchError((Object e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Не удалось ответить: $e')),
+                        );
+                      }),
                     );
                   },
                 ),
@@ -527,9 +541,23 @@ class _QuestionCard extends ConsumerWidget {
             TextButton(
               onPressed: id == null
                   ? null
-                  : () => ref
-                        .read(chatControllerProvider(sessionID).notifier)
-                        .rejectQuestion(id),
+                  : () {
+                      unawaited(
+                        ref
+                            .read(
+                              chatControllerProvider(sessionID).notifier,
+                            )
+                            .rejectQuestion(id)
+                            .catchError((Object e) {
+                          if (!context.mounted) return;
+                          ScaffoldMessenger.of(context).showSnackBar(
+                            SnackBar(
+                              content: Text('Не удалось отклонить: $e'),
+                            ),
+                          );
+                        }),
+                      );
+                    },
               child: const Text('Отклонить'),
             ),
           ],
