@@ -45,7 +45,7 @@ object ArtifactsDownloader {
             if (shouldStop()) throw IOException("Загрузка остановлена")
             attempt++
             try {
-                val code = downloadOnce(url, part, onProgress)
+                val code = downloadOnce(url, part, onProgress, shouldStop)
                 if (code == 416) {
                     // Range за пределами файла: .part уже полного размера
                     // (прошлая попытка упала между записью и rename).
@@ -91,7 +91,12 @@ object ArtifactsDownloader {
     }
 
     /// Возвращает HTTP-код финального ответа (200/206; 416 решает вызывающий).
-    private fun downloadOnce(url: String, dest: File, onProgress: (Long, Long) -> Unit): Int {
+    private fun downloadOnce(
+        url: String,
+        dest: File,
+        onProgress: (Long, Long) -> Unit,
+        shouldStop: () -> Boolean,
+    ): Int {
         val already = if (dest.exists()) dest.length() else 0L
         val conn = URL(url).openConnection() as HttpURLConnection
         conn.connectTimeout = 30_000
@@ -100,26 +105,37 @@ object ArtifactsDownloader {
         if (already > 0) conn.setRequestProperty("Range", "bytes=$already-")
 
         val code = conn.responseCode
-        when {
-            code == 206 -> resumed(conn, dest, already, onProgress)
-            code == 200 -> fresh(conn, dest, onProgress)
-            code == 416 -> Unit // решает вызывающий (проверка .part)
-            code in 400..499 -> throw FatalDownloadException(
-                "HTTP $code для $url (не ретраится)",
-            )
-            else -> throw IOException("HTTP $code для $url")
+        try {
+            when {
+                code == 206 -> resumed(conn, dest, already, onProgress, shouldStop)
+                code == 200 -> fresh(conn, dest, onProgress, shouldStop)
+                code == 416 -> Unit // решает вызывающий (проверка .part)
+                code in 400..499 -> throw FatalDownloadException(
+                    "HTTP $code для $url (не ретраится)",
+                )
+                else -> throw IOException("HTTP $code для $url")
+            }
+        } finally {
+            // Раньше disconnect достигался только на 200/206/416: при
+            // обрыве/фатальной ошибке keep-alive-сокеты висели до 5 ретраев.
+            conn.disconnect()
         }
-        conn.disconnect()
         return code
     }
 
-    private fun fresh(conn: HttpURLConnection, dest: File, onProgress: (Long, Long) -> Unit) {
+    private fun fresh(
+        conn: HttpURLConnection,
+        dest: File,
+        onProgress: (Long, Long) -> Unit,
+        shouldStop: () -> Boolean,
+    ) {
         val total = conn.contentLengthLong
         dest.outputStream().use { out ->
             conn.inputStream.use { input ->
                 var written = 0L
                 val buf = ByteArray(64 * 1024)
                 while (true) {
+                    if (shouldStop()) throw IOException("Загрузка остановлена")
                     val n = input.read(buf)
                     if (n <= 0) break
                     out.write(buf, 0, n)
@@ -136,6 +152,7 @@ object ArtifactsDownloader {
         dest: File,
         already: Long,
         onProgress: (Long, Long) -> Unit,
+        shouldStop: () -> Boolean,
     ) {
         val rangeTotal = conn.contentLengthLong
         val total = if (rangeTotal > 0) rangeTotal + already else -1L
@@ -144,6 +161,7 @@ object ArtifactsDownloader {
                 var written = already
                 val buf = ByteArray(64 * 1024)
                 while (true) {
+                    if (shouldStop()) throw IOException("Загрузка остановлена")
                     val n = input.read(buf)
                     if (n <= 0) break
                     out.write(buf, 0, n)

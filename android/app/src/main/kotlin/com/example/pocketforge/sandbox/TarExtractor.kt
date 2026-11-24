@@ -226,14 +226,24 @@ object TarExtractor {
 
     /// Цель ссылки: абсолютная — от корня destDir, относительная — от каталога
     /// записи (так в rootfs лежат sh -> dash и парные библиотеки libX.so.1
-    /// -> libX.so.1.N.N).
+    /// -> libX.so.1.N.N). Канонический путь цели обязан оставаться внутри
+    /// destDir: linkName "../../.." из tar-записи иначе давал hardlink/
+    /// копию ПРОИЗВОЛЬНОГО хостового файла внутрь rootfs.
     private fun resolveTarget(destDir: File, entry: File, linkName: String): File? {
         val f = if (linkName.startsWith("/")) {
             File(destDir, linkName.drop(1))
         } else {
             File(entry.parentFile, linkName)
         }
-        return f.takeIf { it.exists() }
+        val canonical = f.canonicalFile
+        val root = destDir.canonicalPath
+        if (canonical.path != root &&
+            !canonical.path.startsWith(root + File.separator)
+        ) {
+            Log.w(TAG, "tar: цель ссылки $linkName вне rootfs — пропускаю запись")
+            return null
+        }
+        return canonical.takeIf { it.exists() }
     }
 
     private fun readFully(input: java.io.InputStream, buf: ByteArray): Boolean {

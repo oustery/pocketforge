@@ -162,7 +162,11 @@ class AuthController extends AsyncNotifier<AuthState> {
     try {
       // GET /provider/auth возвращает свободную map: провайдер → методы.
       final res = await client.dio.get<Object?>('/provider/auth');
-      final data = (res.data as Map?)?.cast<String, Object?>() ?? const {};
+      final raw = res.data;
+      // Ответ сервера может быть чем угодно: as Map на списке/строке
+      // бросал TypeError (не Exception) мимо всех обработчиков.
+      final data =
+          raw is Map ? Map<String, Object?>.from(raw) : const <String, Object?>{};
       final entry = data[providerID];
       final methods = <AuthMethodChoice>[];
       if (entry is List) {
@@ -244,11 +248,15 @@ class AuthController extends AsyncNotifier<AuthState> {
         providerID: providerID,
         body: {
           'type': 'oauth',
+          // Device flow GitHub не выдаёт refresh-токен, и сам токен не
+          // истекает по расписанию; поле обязательно для oauth-типа
+          // opencode, поэтому горизонт 10 лет вместо ложных 30 дней,
+          // после которых провайдер «молча» отваливался.
           'refresh': '',
           'access': accessToken,
           'expires':
               DateTime.now().toUtc().millisecondsSinceEpoch ~/ 1000 +
-              3600 * 24 * 30,
+              3600 * 24 * 365 * 10,
           'accountId': 'device-flow',
         },
       ),

@@ -100,7 +100,11 @@ class GitController extends AsyncNotifier<GitState> {
   /// Обновляет данные.
   Future<void> refresh() async {
     final cur = state.value;
-    if (cur == null) return;
+    if (cur == null || cur.busy) {
+      // Повторный вызов (RefreshIndicator + кнопка в AppBar) раньше
+      // сбрасывал busy первым завершившимся, пока второй ещё работал.
+      return;
+    }
     state = AsyncValue<GitState>.data(
       cur.copyWith(busy: true, clearError: true),
     );

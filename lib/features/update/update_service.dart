@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:crypto/crypto.dart';
@@ -88,10 +89,13 @@ class UpdateService {
       options: Options(responseType: ResponseType.json),
     );
     final data = res.data ?? const <String, Object?>{};
-    final version = (data['version'] ?? '') as String;
-    final apkUrl = (data['apkUrl'] ?? '') as String;
-    final notes = (data['notes'] ?? '') as String;
-    final apkSha256 = (data['apkSha256'] ?? '') as String;
+    // Манифест может быть кривым: жёсткие as-касты бросали TypeError
+    // (не Exception), который уходил мимо всех обработчиков on Exception.
+    final version = data['version'] is String ? data['version'] as String : '';
+    final apkUrl = data['apkUrl'] is String ? data['apkUrl'] as String : '';
+    final notes = data['notes'] is String ? data['notes'] as String : '';
+    final apkSha256 =
+        data['apkSha256'] is String ? data['apkSha256'] as String : '';
     if (version.isEmpty || apkUrl.isEmpty) {
       throw const FormatException('Манифест без version/apkUrl');
     }
@@ -107,6 +111,8 @@ class UpdateService {
   /// Скачивает APK в [dir] (по умолчанию кеш приложения).
   /// Возвращает путь к файлу.
   ///
+  /// Файл пишется стримингово, sha256 считается по ходу (chunked): APK
+  /// целиком в память не грузится и хеш не крутится синхронно в UI-изоляте.
   /// Если передан [expectedSha256] (из манифеста), файл проверяется по
   /// sha256: при расхождении выполняется одна повторная попытка, затем
   /// исключение. Битый/обрезанный APK — источник ошибки установщика
@@ -123,20 +129,41 @@ class UpdateService {
     final target = File('${dir.path}${Platform.pathSeparator}$name');
     await dir.create(recursive: true);
     for (var attempt = 1; attempt <= 2; attempt++) {
-      final resp = await _dio.get<List<int>>(
+      final resp = await _dio.get<ResponseBody>(
         url,
         options: Options(
-          responseType: ResponseType.bytes,
+          responseType: ResponseType.stream,
           followRedirects: true,
         ),
       );
-      final bytes = resp.data;
-      if (bytes == null || bytes.isEmpty) {
+      final body = resp.data;
+      if (body == null) {
         throw Exception('Пустой ответ при скачивании APK');
       }
-      onProgress?.call(bytes.length, bytes.length);
-      await target.writeAsBytes(bytes, flush: true);
-      final actual = sha256.convert(bytes).toString();
+      final total = int.tryParse(
+        resp.headers.value(Headers.contentLengthHeader) ?? '',
+      );
+      final digestSink = _DigestSink();
+      final hasher = sha256.startChunkedConversion(digestSink);
+      var received = 0;
+      final sink = target.openWrite();
+      try {
+        await for (final chunk in body.stream) {
+          hasher.add(chunk);
+          sink.add(chunk);
+          received += chunk.length;
+          onProgress?.call(received, total);
+        }
+        await sink.flush();
+      } finally {
+        await sink.close();
+      }
+      hasher.close();
+      final digest = digestSink.digest;
+      if (digest == null) {
+        throw Exception('Не удалось вычислить sha256 APK');
+      }
+      final actual = digest.toString().toLowerCase();
       if (expectedSha256 == null || actual == expectedSha256) {
         return target.path;
       }
@@ -190,6 +217,19 @@ int semverCompare(String a, String b) {
     if (pa[i] != pb[i]) return pa[i] < pb[i] ? -1 : 1;
   }
   return 0;
+}
+
+/// Приёмник итогового digest'а для chunked-хеширования (package:crypto):
+/// `hasher.close()` кладёт готовый Digest в [digest].
+class _DigestSink implements ChunkedConversionSink<Digest> {
+  /// Итоговый digest.
+  Digest? digest;
+
+  @override
+  void add(Digest d) => digest = d;
+
+  @override
+  void close() {}
 }
 
 List<int> _parseSemver(String v) {

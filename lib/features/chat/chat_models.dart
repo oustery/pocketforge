@@ -18,13 +18,24 @@ class ChatPartView {
   });
   /// Собирает часть из сырого JSON (типы: text/reasoning/tool/file).
   factory ChatPartView.fromMap(Map<String, Object?> p) {
-    final type = (p['type'] ?? 'other') as String;
-    final state = (p['state'] as Map?)?.cast<String, Object?>();
-    var status = state?['status'] as String?;
-    final title = state?['title'] as String?;
+    final stateRaw = p['state'];
+    final state = stateRaw is Map ? stateRaw.cast<String, Object?>() : null;
+    final statusRaw = state?['status'];
+    var status = statusRaw is String ? statusRaw : null;
+    final titleRaw = state?['title'];
+    final title = titleRaw is String ? titleRaw : null;
     if (status == null && state?['output'] != null) status = 'completed';
+    final typeRaw = p['type'];
+    final type = typeRaw is String ? typeRaw : 'other';
+    final idRaw = p['id'] ?? p['callID'];
+    final textRaw = p['text'];
+    final toolRaw = p['tool'];
+    final meta = p['meta'];
+    final fileRaw = p['filename'] ?? (meta is Map ? meta['filename'] : null);
+    final mimeRaw = p['mime'];
+    final urlRaw = p['url'];
     return ChatPartView(
-      id: (p['id'] ?? p['callID'] ?? '') as String,
+      id: idRaw is String ? idRaw : '',
       kind: switch (type) {
         'text' => 'text',
         'reasoning' => 'reasoning',
@@ -32,15 +43,13 @@ class ChatPartView {
         'file' => 'file',
         _ => 'other',
       },
-      text: (p['text'] ?? '') as String,
-      toolName: p['tool'] as String?,
+      text: textRaw is String ? textRaw : '',
+      toolName: toolRaw is String ? toolRaw : null,
       toolStatus: status,
       toolTitle: title,
-      fileName: (p['filename'] ??
-              (p['meta'] as Map?)?['filename'])
-          as String?,
-      mime: p['mime'] as String?,
-      url: p['url'] as String?,
+      fileName: fileRaw is String ? fileRaw : null,
+      mime: mimeRaw is String ? mimeRaw : null,
+      url: urlRaw is String ? urlRaw : null,
     );
   }
 
@@ -99,10 +108,14 @@ class ChatMessageView {
         }
       }
     }
-    final time = (m['time'] as Map?)?.cast<String, Object?>();
+    final time = (m['time'] is Map
+            ? (m['time'] as Map).cast<String, Object?>()
+            : null);
+    final idRaw = m['id'];
+    final roleRaw = m['role'];
     return ChatMessageView(
-      id: (m['id'] ?? '') as String,
-      role: (m['role'] ?? 'assistant') as String,
+      id: idRaw is String ? idRaw : '',
+      role: roleRaw is String ? roleRaw : 'assistant',
       parts: parts,
       timeCreated: time?['created'] as num?,
     );
@@ -193,29 +206,31 @@ class ChatEventReducer {
 
     switch (type) {
       case 'message.updated':
-        final info = (payload['info'] as Map?)?.cast<String, Object?>();
-        if (info == null) return null;
-        return state.withMessages(_upsert(state.messages, info));
+        final info = payload['info'];
+        if (info is! Map) return null;
+        return state.withMessages(
+          _upsert(state.messages, Map<String, Object?>.from(info)),
+        );
       case 'message.part.updated':
-        final part = (payload['part'] as Map?)?.cast<String, Object?>();
-        if (part == null) return null;
-        final messageID =
-            (part['messageID'] ?? payload['messageID']) as String?;
-        if (messageID == null) return null;
+        final partRaw = payload['part'];
+        if (partRaw is! Map) return null;
+        final part = Map<String, Object?>.from(partRaw);
+        final messageID = part['messageID'] ?? payload['messageID'];
+        if (messageID is! String) return null;
         final view = ChatPartView.fromMap(part);
         return state.withMessages(
           _upsertPart(state.messages, messageID, view),
         );
       case 'message.removed':
-        final messageID = payload['messageID'] as String?;
-        if (messageID == null) return null;
+        final messageID = payload['messageID'];
+        if (messageID is! String) return null;
         return state.withMessages(
           state.messages.where((m) => m.id != messageID).toList(),
         );
       case 'permission.updated':
       case 'permission.asked':
-        final id = (payload['id'] ?? payload['permissionID']) as String?;
-        if (id == null) return null;
+        final id = payload['id'] ?? payload['permissionID'];
+        if (id is! String) return null;
         final list = List<Map<String, Object?>>.from(state.permissions)
           ..removeWhere(
             (e) => (e['id'] ?? e['permissionID']) == id,
@@ -223,16 +238,16 @@ class ChatEventReducer {
           ..add(payload);
         return _with(state, permissions: list);
       case 'permission.replied':
-        final id = (payload['permissionID'] ?? payload['id']) as String?;
-        if (id == null) return null;
+        final id = payload['permissionID'] ?? payload['id'];
+        if (id is! String) return null;
         final list = state.permissions
             .where((e) => (e['id'] ?? e['permissionID']) != id)
             .toList();
         return _with(state, permissions: list);
       case 'question.asked':
       case 'question.updated':
-        final id = (payload['id'] ?? payload['requestID']) as String?;
-        if (id == null) return null;
+        final id = payload['id'] ?? payload['requestID'];
+        if (id is! String) return null;
         final list = List<Map<String, Object?>>.from(state.questions)
           ..removeWhere(
             (e) => (e['id'] ?? e['requestID']) == id,
@@ -241,8 +256,8 @@ class ChatEventReducer {
         return _with(state, questions: list);
       case 'question.replied':
       case 'question.rejected':
-        final id = (payload['requestID'] ?? payload['id']) as String?;
-        if (id == null) return null;
+        final id = payload['requestID'] ?? payload['id'];
+        if (id is! String) return null;
         final list = state.questions
             .where((e) => (e['id'] ?? e['requestID']) != id)
             .toList();
@@ -250,9 +265,18 @@ class ChatEventReducer {
       case 'session.idle':
         return _with(state, streaming: false);
       case 'session.error':
-        final err = (payload['error'] as Map?)?['message'] as String? ??
-            payload['message'] as String?;
-        return _with(state, streaming: false, error: err ?? 'Ошибка сессии');
+        // error бывает и Map {message: …} (v2), и просто строкой (v1) —
+        // каст as Map ронял обработчик TypeError'ом, и ошибка сессии
+        // не доходила до пользователя.
+        final errRaw = payload['error'];
+        final err = errRaw is Map
+            ? errRaw['message'] ?? payload['message']
+            : errRaw ?? payload['message'];
+        return _with(
+          state,
+          streaming: false,
+          error: err is String ? err : 'Ошибка сессии',
+        );
       default:
         return null;
     }
@@ -287,11 +311,22 @@ List<ChatMessageView> _upsert(
   final view = ChatMessageView.fromMap(info);
   final next = List<ChatMessageView>.from(list);
   final idx = next.indexWhere((m) => m.id == view.id);
-  if (idx >= 0) {
-    next[idx] = view;
-  } else {
+  if (idx < 0) {
     next.add(view);
+    return next;
   }
+  final old = next[idx];
+  // v1-форма message.updated несёт только info, без parts: без этого
+  // merge'а metadata-апдейт затирал уже накопленные части (текст,
+  // tool-карточки) пустым сообщением.
+  next[idx] = view.parts.isEmpty && old.parts.isNotEmpty
+      ? ChatMessageView(
+          id: old.id,
+          role: view.role,
+          parts: old.parts,
+          timeCreated: view.timeCreated ?? old.timeCreated,
+        )
+      : view;
   return next;
 }
 

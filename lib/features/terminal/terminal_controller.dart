@@ -11,8 +11,16 @@ class TerminalSession {
 
   final StringBuffer _output = StringBuffer();
 
+  /// Кешированный снапшот [_output]: буфер до 100 КБ не копируется
+  /// в строку дважды за каждый build (геттер дергается из двух мест).
+  String? _outputCache;
+
   /// Полный вывод терминала (эхо команд, stdout/stderr, коды возврата).
-  String get output => _output.toString();
+  String get output {
+    final cached = _outputCache;
+    if (cached != null) return cached;
+    return _outputCache = _output.toString();
+  }
 
   /// История команд, от старых к новым (дубликаты подряд не повторяются).
   final List<String> history = <String>[];
@@ -23,6 +31,7 @@ class TerminalSession {
   /// Добавляет эхо команды в вывод.
   void appendCommand(String command) {
     _output.writeln('\$ $command');
+    _outputCache = null;
     _trim();
   }
 
@@ -38,12 +47,14 @@ class TerminalSession {
       _output.writeln(outcome.stderr.trimRight());
     }
     _output.writeln('[exit ${outcome.code}]');
+    _outputCache = null;
     _trim();
   }
 
   /// Добавляет строку ошибки канала (песочница не готова, таймаут и т.п.).
   void appendError(String message) {
     _output.writeln('ошибка: $message');
+    _outputCache = null;
     _trim();
   }
 
@@ -88,7 +99,10 @@ class TerminalSession {
   }
 
   /// Очищает вывод (история команд сохраняется).
-  void clear() => _output.clear();
+  void clear() {
+    _output.clear();
+    _outputCache = null;
+  }
 
   void _trim() {
     if (_output.length > maxOutputChars) {
@@ -96,6 +110,7 @@ class TerminalSession {
       _output
         ..clear()
         ..write(s.substring(s.length - maxOutputChars));
+      _outputCache = null;
     }
   }
 }

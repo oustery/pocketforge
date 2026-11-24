@@ -186,4 +186,13 @@ class MainActivity : FlutterActivity() {
         startActivity(intent)
         result.success("launched")
     }
+
+    override fun onDestroy() {
+        // Пересоздание activity/engine: не держим уничтоженный engine
+        // через статический канал и не оставляем висеть exec-поток
+        // (non-daemon core-нить иначе живёт до смерти процесса).
+        RuntimeService.methodChannel = null
+        execExecutor.shutdownNow()
+        super.onDestroy()
+    }
 }

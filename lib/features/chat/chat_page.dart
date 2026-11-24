@@ -1,5 +1,3 @@
-import 'dart:async';
-
 import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:material_ui/material_ui.dart';
@@ -418,11 +416,17 @@ class _PermissionCard extends ConsumerWidget {
         (permission['patterns'] as List?)?.cast<String>() ?? const [];
     void reply(String reply) {
       if (id == null) return;
-      unawaited(
-        ref
-            .read(chatControllerProvider(sessionID).notifier)
-            .replyPermission(id, reply),
-      );
+      // Ошибку не глотаем: без неё карточка залипает без всякой реакции
+      // на сетевой сбой.
+      ref
+          .read(chatControllerProvider(sessionID).notifier)
+          .replyPermission(id, reply)
+          .catchError((Object e) {
+        if (!context.mounted) return;
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Не удалось отправить ответ: $e')),
+        );
+      });
     }
 
     return Card(
@@ -514,22 +518,34 @@ class _QuestionCard extends ConsumerWidget {
                   title: Text((opt['label'] ?? opt['value'] ?? '') as String),
                   onTap: () {
                     if (id == null) return;
-                    unawaited(
-                      ref
-                          .read(chatControllerProvider(sessionID).notifier)
-                          .replyQuestion(id, [
-                            [(opt['label'] ?? opt['value'] ?? '') as String],
-                          ]),
-                    );
+                    ref
+                        .read(chatControllerProvider(sessionID).notifier)
+                        .replyQuestion(id, [
+                          [(opt['label'] ?? opt['value'] ?? '') as String],
+                        ])
+                        .catchError((Object e) {
+                      if (!context.mounted) return;
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        SnackBar(content: Text('Не удалось ответить: $e')),
+                      );
+                    });
                   },
                 ),
             ],
             TextButton(
               onPressed: id == null
                   ? null
-                  : () => ref
-                        .read(chatControllerProvider(sessionID).notifier)
-                        .rejectQuestion(id),
+                  : () {
+                      ref
+                          .read(chatControllerProvider(sessionID).notifier)
+                          .rejectQuestion(id)
+                          .catchError((Object e) {
+                        if (!context.mounted) return;
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          SnackBar(content: Text('Не удалось отклонить: $e')),
+                        );
+                      });
+                    },
               child: const Text('Отклонить'),
             ),
           ],

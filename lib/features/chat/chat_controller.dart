@@ -14,9 +14,24 @@ final chatClientProvider =
     Provider<OpenCodeClient>((_) => throw UnimplementedError());
 
 /// Поток сырых SSE-фреймов (переопределяется в тестах).
-final rawEventsProvider = Provider<Stream<Map<String, Object?>>>(
-  (ref) => ref.watch(chatClientProvider).eventsRaw(),
-);
+///
+/// `eventsRaw()` отдаёт single-subscription стрим: второй живой
+/// контроллер чата (family по sessionID) падал на повторном `.listen`
+/// с StateError и оставлял новый чат навсегда в error-состоянии.
+/// Шина рассылает один источник всем подписчикам.
+final rawEventsProvider = Provider<Stream<Map<String, Object?>>>((ref) {
+  final bus = StreamController<Map<String, Object?>>.broadcast();
+  final sub = ref.watch(chatClientProvider).eventsRaw().listen(
+        bus.add,
+        onError: (Object _) {},
+        cancelOnError: false,
+      );
+  ref.onDispose(() {
+    unawaited(sub.cancel());
+    unawaited(bus.close());
+  });
+  return bus.stream;
+});
 
 /// Список сессий (для drawer).
 class SessionsState {
@@ -59,9 +74,17 @@ class SessionsController extends AsyncNotifier<SessionsState> {
     final client = ref.read(chatClientProvider);
     final s = await client.sessionCreate();
     final cur = state.value;
+    if (cur == null) {
+      // Провайдер ещё грузится (после invalidate): не падаем на cur!,
+      // а собираем состояние заново вокруг созданной сессии.
+      state = AsyncValue<SessionsState>.data(
+        SessionsState(sessions: <Session>[s], activeId: s.id),
+      );
+      return;
+    }
     state = AsyncValue<SessionsState>.data(
       SessionsState(
-        sessions: <Session>[s, ...cur!.sessions],
+        sessions: <Session>[s, ...cur.sessions],
         activeId: s.id,
         error: cur.error,
       ),
@@ -107,28 +130,53 @@ class ChatController extends AsyncNotifier<ChatState> {
 
     // Поток событий применяется только к своей сессии.
     unawaited(_sub?.cancel());
+    final backlog = <Map<String, Object?>>[];
     _sub = ref.watch(rawEventsProvider).listen((frame) {
-      final type = frame['type'] as String?;
-      if (type != null && type.startsWith('server.')) return;
-      final raw = frame['data'] ?? frame['properties'] ?? frame;
-      if (raw is! Map) return;
-      final payload = Map<String, Object?>.from(raw);
-      final info = payload['info'];
-      final sessionID =
-          (payload['sessionID'] ??
-                  (info is Map ? info['sessionID'] : null))
-              as String?;
-      if (sessionID != null && sessionID != arg) return;
-
-      final cur = state.value;
-      if (cur == null) return;
-      final next = _reducer.apply(cur, frame);
-      if (next != null) {
-        state = AsyncValue<ChatState>.data(next);
+      // Начальная загрузка ещё не завершилась (state.value == null):
+      // события буферизуем и отыгрываем после загрузки — иначе старт
+      // генерации, session.error и permission.asked в первые секунды
+      // молча терялись.
+      if (state.value == null) {
+        backlog.add(frame);
+        return;
       }
+      _applyFrame(frame);
     });
 
-    return _load(arg, client);
+    return _load(arg, client).then((loaded) {
+      var st = loaded;
+      for (final frame in backlog) {
+        st = _nextState(st, frame) ?? st;
+      }
+      backlog.clear();
+      return st;
+    });
+  }
+
+  /// Применяет фрейм к текущему состоянию нотифайера.
+  void _applyFrame(Map<String, Object?> frame) {
+    final cur = state.value;
+    if (cur == null) return;
+    final next = _nextState(cur, frame);
+    if (next != null) {
+      state = AsyncValue<ChatState>.data(next);
+    }
+  }
+
+  /// Фильтр своей сессии + редьюсер; возвращает новое состояние или null.
+  ChatState? _nextState(ChatState cur, Map<String, Object?> frame) {
+    final type = frame['type'] as String?;
+    if (type != null && type.startsWith('server.')) return null;
+    final raw = frame['data'] ?? frame['properties'] ?? frame;
+    if (raw is! Map) return null;
+    final payload = Map<String, Object?>.from(raw);
+    final info = payload['info'];
+    final sessionID =
+        (payload['sessionID'] ??
+                (info is Map ? info['sessionID'] : null))
+            as String?;
+    if (sessionID != null && sessionID != arg) return null;
+    return _reducer.apply(cur, frame);
   }
 
   Future<ChatState> _load(String sessionID, OpenCodeClient client) async {
@@ -164,13 +212,22 @@ class ChatController extends AsyncNotifier<ChatState> {
   ) async {
     try {
       final res = await call();
-      if (res is List) {
-        return res
-            .whereType<Map<Object?, Object?>>()
-            .map(Map<String, Object?>.from)
-            .toList();
+      if (res is! List) return const [];
+      final out = <Map<String, Object?>>[];
+      for (final e in res) {
+        if (e is Map) {
+          out.add(Map<String, Object?>.from(e));
+        } else if (e is PermissionRequest || e is QuestionRequest) {
+          // Сгенерированный клиент возвращает типизированные модели:
+          // приводим к raw-виду, который ждут редьюсер и карточки
+          // (иначе списки разрешений/вопросов всегда пустые).
+          final raw = e is PermissionRequest
+              ? e.toJson()
+              : (e as QuestionRequest).toJson();
+          out.add(Map<String, Object?>.from(raw));
+        }
       }
-      return const [];
+      return out;
     } on Exception {
       return const [];
     }

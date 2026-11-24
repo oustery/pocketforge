@@ -1,3 +1,4 @@
+import 'package:flutter/foundation.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 
 /// Абстракция хранения токенов приложения (для тестов — InMemory).
@@ -51,6 +52,12 @@ class SecureTokenStore implements TokenStore {
     try {
       await _storage.write(key: _key(provider), value: token);
     } on Exception {
+      // Молчаливый fallback маскировал потерю токена при рестарте
+      // (in-memory хранилище не переживает перезапуск процесса).
+      debugPrint(
+        'TokenStore: secure storage недоступен, токен $provider '
+        'сохранён в память и не переживёт рестарт',
+      );
       await _fallback.save(provider, token);
     }
   }
